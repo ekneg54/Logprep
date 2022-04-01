@@ -5,6 +5,7 @@ import re
 from abc import ABC, abstractmethod
 from encodings import utf_8
 from logging import getLogger
+from numpy import isin
 
 import pytest
 
@@ -25,22 +26,18 @@ class BaseProcessorTestCase(ABC):
     object = None
 
     @property
-    @abstractmethod
     def specific_rules_dirs(self):
         """
-        the specific rules_dirs for the processor
-        has to be implemented
+        gets the specific rules_dirs for the processor from CONFIG
         """
-        ...
+        return self.CONFIG.get("specific_rules")
 
     @property
-    @abstractmethod
     def generic_rules_dirs(self):
         """
-        the generic rules_dirs for the processor
-        has to be implemented
+        gets the generic rules_dirs for the processor from CONFIG
         """
-        ...
+        return self.CONFIG.get("generic_rules")
 
     def set_rules(self, rules_dirs):
         """
@@ -139,7 +136,10 @@ class BaseProcessorTestCase(ABC):
     def test_add_rules_from_directory(self):
         generic_rules_size = self.object._generic_tree.get_size()
         specific_rules_size = self.object._specific_tree.get_size()
-        self.object.add_rules_from_directory(self.generic_rules_dirs, self.specific_rules_dirs)
+        self.object.add_rules_from_directory(
+            generic_rules_dirs=self.specific_rules_dirs,
+            specific_rules_dirs=self.generic_rules_dirs,
+        )
         new_generic_rules_size = self.object._generic_tree.get_size()
         new_specific_rules_size = self.object._specific_tree.get_size()
         assert new_generic_rules_size > generic_rules_size
@@ -151,10 +151,16 @@ class BaseProcessorTestCase(ABC):
         in the rules directories
         ensures that every rule in rule tree is unique
         """
-        self.object.add_rules_from_directory(self.generic_rules_dirs, self.specific_rules_dirs)
+        self.object.add_rules_from_directory(
+            generic_rules_dirs=self.specific_rules_dirs,
+            specific_rules_dirs=self.specific_rules_dirs,
+        )
         generic_rules_size = self.object._generic_tree.get_size()
         specific_rules_size = self.object._specific_tree.get_size()
-        self.object.add_rules_from_directory(self.generic_rules_dirs, self.specific_rules_dirs)
+        self.object.add_rules_from_directory(
+            generic_rules_dirs=self.specific_rules_dirs,
+            specific_rules_dirs=self.specific_rules_dirs,
+        )
         new_generic_rules_size = self.object._generic_tree.get_size()
         new_specific_rules_size = self.object._specific_tree.get_size()
         assert new_generic_rules_size == generic_rules_size
