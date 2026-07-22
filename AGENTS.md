@@ -3,7 +3,7 @@
 ## Quick Reference
 
 ```bash
-# Install
+# Install (lockfile must be in sync — CI runs `uv lock --check`)
 uv sync --frozen --extra dev
 pre-commit install
 
@@ -16,8 +16,13 @@ uv run pytest tests/unit/processor/dropper/test_dropper.py -vvv
 # Test (single test function)
 uv run pytest tests/unit/processor/dropper/test_dropper.py::TestDropper::test_something -vvv
 
-# Lint + format (pre-commit)
+# Lint + format (pre-commit, runs all hooks)
 pre-commit run --all-files
+
+# Individual checks (what CI runs)
+uv run black --check --diff --config ./pyproject.toml .
+uv run pylint <changed-files>
+uv run mypy <changed-files>
 
 # Build docs locally
 sudo apt install pandoc && uv sync --frozen --extra doc && cd doc && make html
@@ -32,7 +37,7 @@ Logprep is a log processing pipeline: **Input Connector → Processor Chain → 
 - `logprep/` — Legacy (synchronous multiprocessing). Entry: `logprep.run_logprep:cli`
 - `logprep/ng/` — Next-gen (async, uvloop). Entry: `logprep.run_ng:cli`
 
-Both have their own ABCs, connectors, processors, and runners. The registry (`logprep/registry.py`) maps component type names to either legacy or ng implementations; `Registry.set_ng_active(True)` switches the active mapping.
+Both have their own ABCs (`logprep/abc/` and `logprep/ng/abc/`), connectors, processors, and runners. The registry (`logprep/registry.py`) maps component type names to either legacy or ng implementations; `Registry.set_ng_active(True)` switches the active mapping. Tests preload both mappings at session start.
 
 ### Key directories
 
@@ -40,15 +45,17 @@ Both have their own ABCs, connectors, processors, and runners. The registry (`lo
 |---|---|
 | `logprep/abc/` | Abstract base classes (Component, Processor, Connector, Input, Output) |
 | `logprep/processor/` | 30+ processors, each in its own subdirectory with `processor.py` + `rule.py` |
+| `logprep/ng/` | Next-gen async implementations (abc, connector, processor, event, runner, metrics, util) |
 | `logprep/connector/` | Legacy connectors (kafka, opensearch, s3, http, file, json/jsonl) |
 | `logprep/ng/connector/` | Ng connectors (fewer implemented) |
+| `logprep/generator/` | Event generator connectors (confluent kafka, http) |
 | `logprep/framework/` | Pipeline manager and pipeline orchestration |
 | `logprep/filter/` | Rule filter engine |
 | `logprep/util/` | Helpers, config parsing, time utilities |
 | `logprep/metrics/` | Prometheus metrics |
 | `logprep/registry.py` | Component type → class path mapping |
 | `tests/unit/` | Mirrors `logprep/` structure |
-| `tests/acceptance/` | End-to-end integration tests |
+| `tests/acceptance/` | End-to-end tests (require docker compose with Kafka + OpenSearch) |
 | `tests/testdata/` | Test fixtures |
 
 ### Component pattern
@@ -85,15 +92,27 @@ Each processor implements `_apply_rules()`. Each processor has a corresponding `
 - **Docstrings**: NumPy style, PEP-257. No docstrings required on tests.
 - **Data classes**: Use `attrs` with `@define(kw_only=True)`
 - **Type hints**: Required on all code
-- **Pre-commit hooks**: trailing-whitespace, end-of-file-fixer, no-commit-to-branch, debug-statements, check-merge-conflict, check-added-large-files, check-toml
+- **Pre-commit hooks**: trailing-whitespace, end-of-file-fixer, no-commit-to-branch (blocks direct commits to `main`), debug-statements, check-merge-conflict, check-added-large-files, check-toml
 
 ## Testing
 
 - Framework: pytest with `asyncio_mode = "auto"` (no need for `@pytest.mark.asyncio` decorators)
+- Supported Python: 3.11, 3.12, 3.13, 3.14
 - Session start preloads the Registry twice (legacy + ng) — see `tests/conftest.py:pytest_sessionstart`
 - Tests must clean up: auto-fixture kills dangling child processes, clears Prometheus registry, clears getter cache
 - Coverage aim: 100%
-- Acceptance tests in `tests/acceptance/` require external services (kafka, opensearch)
+- Acceptance tests in `tests/acceptance/` require external services (kafka, opensearch) via docker compose
+
+## CI (GitHub Actions)
+
+- **PR CI** (`.github/workflows/ci.yml`): runs on PR open/sync, triggers:
+  - `uv lock --check` (lockfile must match `pyproject.toml`)
+  - CHANGELOG protection (only "Upcoming Changes" section may be modified in PRs)
+  - Unit + acceptance tests across Python 3.11–3.14
+  - Code quality (black, pylint, mypy on changed files only)
+  - Docker compose integration test (`check-examples.yml`) with Kafka + OpenSearch
+  - Container build
+  - Docs build
 
 ## Deprecation Convention
 
@@ -106,5 +125,6 @@ When deprecating a function/feature:
 
 - Branch naming: `dev-<feature>` or `fix-<issue>`
 - PRs target `main`; squash-and-merge only
-- Never push directly to `main`
+- Never push directly to `main` (enforced by pre-commit hook)
 - Update `CHANGELOG.md` for every feature/improvement/bugfix
+- Commit subject ≤50 chars, imperative mood, no period; body wraps at 72 chars
