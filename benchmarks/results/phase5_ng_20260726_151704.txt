@@ -1,0 +1,432 @@
+compose_opensearch-data
+2026-07-26 17:13:48 857111 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:13:48 857111 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:13:48 857111 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:13:48 857111 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:13:48 857111 None root       INFO    : Log level set to 'WARNING'
+2026-07-26 17:13:48 857111 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-26 17:13:48 857111 root Runner     INFO    : Startup complete
+
+=== BENCHMARK CONFIGURATION ===
+timestamp (local)             : 2026-07-26T17:13:26.120068
+timestamp (UTC)               : 2026-07-26T15:13:26.120072+00:00
+python version                : 3.14.2
+----------------------------------------
+bootstrap_servers             : 127.0.0.1:9092
+compose_dir                   : examples/compose
+container_runtime             : docker
+event_num                     : 400_000
+gen_input_source              : examples/exampledata/kafka_generate_input_logdata/logclass/test_input.jsonl
+kafka_partitions              : 1
+ng                            : 1
+  ↳ mode                      : logprep-ng
+  ↳ pipeline_config           : examples/exampledata/config/_benchmark_ng_pipeline.yml
+opensearch_url                : http://localhost:9200
+out                           : None
+processed_index               : processed
+prometheus_multiproc_dir      : /tmp/logprep
+runs                          : [30, 30, 30]
+services                      : ['kafka', 'opensearch']
+sleep_after_compose_up_s      : 30
+sleep_after_logprep_start_s   : 10
+================================
+
+----- Run Round 1: 30 seconds -----
+2026-07-26 17:14:00 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:01 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:01 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:01 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:03 857111 Task-36 OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:03 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:03 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:03 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:04 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:04 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:06 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:06 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:06 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:07 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:14:07 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:07 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:08 857111 Task-48 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:09 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:09 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:09 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:10 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:10 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:11 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:12 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:12 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:13 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:13 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:13 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:13 857111 Task-61 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:15 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:15 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:15 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:16 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:16 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:17 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:17 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:17 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:18 857111 Task-72 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:18 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:18 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:18 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:20 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:20 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:20 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:21 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:21 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:22 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:22 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:22 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:23 857111 Task-85 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:23 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:24 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:24 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:25 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:25 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:25 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:26 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:26 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:26 857111 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:14:26 857111 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:14:27 857111 Task-97 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:27 857111 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:14:27 857111 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:14:27 857111 error_worker PipelineManager ERROR   : failed to store 4759 error events in the error output
+2026-07-26 17:14:27 857111 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+compose_opensearch-data
+2026-07-26 17:15:00 866565 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:15:00 866565 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:15:00 866565 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:15:00 866565 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:15:00 866565 None root       INFO    : Log level set to 'WARNING'
+2026-07-26 17:15:00 866565 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-26 17:15:00 866565 root Runner     INFO    : Startup complete
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.461 s
+measurement window:     30.000 s
+processed (OpenSearch): 0
+throughput:             0.00 docs/s
+--------------
+
+----- Run Round 2: 30 seconds -----
+2026-07-26 17:15:12 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:13 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:13 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:13 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:15 866565 Task-36 OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:15 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:15 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:15 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:16 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:16 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:17 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:17 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:17 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:18 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:15:18 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:18 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:20 866565 Task-49 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:20 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:20 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:20 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:21 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:21 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:22 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:22 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:22 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:24 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:24 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:24 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:25 866565 Task-62 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:25 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:25 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:25 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:26 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:26 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:27 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:27 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:27 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:29 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:29 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:29 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:30 866565 Task-75 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:30 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:30 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:30 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:31 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:31 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:32 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:33 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:33 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:34 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:34 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:34 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:35 866565 Task-88 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:35 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:35 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:35 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:36 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:36 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:37 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:38 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:38 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:38 866565 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:15:38 866565 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:15:39 866565 Task-101 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:39 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:39 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:15:39 866565 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:15:39 866565 error_worker PipelineManager ERROR   : failed to store 1265 error events in the error output
+2026-07-26 17:15:39 866565 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+compose_opensearch-data
+2026-07-26 17:16:13 876871 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:16:13 876871 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:16:13 876871 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:16:13 876871 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-26 17:16:14 876871 None root       INFO    : Log level set to 'WARNING'
+2026-07-26 17:16:14 876871 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-26 17:16:14 876871 root Runner     INFO    : Startup complete
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.499 s
+measurement window:     30.000 s
+processed (OpenSearch): 0
+throughput:             0.00 docs/s
+--------------
+
+----- Run Round 3: 30 seconds -----
+2026-07-26 17:16:26 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:27 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:27 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:27 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:28 876871 Task-36 OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:29 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:29 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:29 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:30 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:30 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:31 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:31 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:31 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:32 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: OpenSearch bulk error: status 400 Bad Request
+2026-07-26 17:16:32 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:32 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:33 876871 Task-49 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:34 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:34 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:34 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:35 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:35 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:36 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:36 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:36 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:37 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:37 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:37 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:38 876871 Task-62 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:39 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:39 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:39 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:40 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:40 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:41 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:41 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:41 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:42 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:42 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:43 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:44 876871 Task-75 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:44 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:44 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:44 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:45 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:45 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:46 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:47 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:47 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:48 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:48 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:48 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:49 876871 Task-88 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:49 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:49 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:49 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:50 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:50 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:51 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:52 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:52 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:52 876871 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:16:52 876871 None Runner     INFO    : Setting stop signal for the runner
+2026-07-26 17:16:52 876871 Task-101 OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:53 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 output_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:53 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker PipelineManager ERROR   : failed to store 5000 error events in the error output
+2026-07-26 17:16:53 876871 error_worker OpenSearchOutput ERROR   : bulk request failed: circuit breaker is open
+2026-07-26 17:16:53 876871 error_worker PipelineManager ERROR   : failed to store 715 error events in the error output
+2026-07-26 17:16:53 876871 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.203 s
+measurement window:     30.000 s
+processed (OpenSearch): 0
+throughput:             0.00 docs/s
+--------------
+
+
+=== FINAL BENCHMARK SUMMARY ===
+runs:                  3
+total runtime:         90.000 s
+total processed:       0
+
+throughput (weighted): 0.00 docs/s
+throughput (median):   0.00 docs/s
+throughput (average):  0.00 docs/s
+throughput (min/max):  0.00 / 0.00 docs/s
+throughput (std dev):  0.00 docs/s
+================================
+
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container kafka Started 
+ Container opensearch Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+ Container kafka Stopping 
+ Container opensearch Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container kafka Creating 
+ Container opensearch Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container opensearch Starting 
+ Container kafka Starting 
+ Container kafka Started 
+ Container opensearch Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_kafka Removed 
+ Network compose_opensearch Removed 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container kafka Started 
+ Container opensearch Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 

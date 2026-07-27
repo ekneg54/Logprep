@@ -1,0 +1,67 @@
+
+=== BENCHMARK CONFIGURATION ===
+timestamp (local)             : 2026-07-24T17:07:29.336830
+timestamp (UTC)               : 2026-07-24T15:07:29.336834+00:00
+python version                : 3.14.2
+----------------------------------------
+bootstrap_servers             : 127.0.0.1:9092
+compose_dir                   : examples/compose
+container_runtime             : docker
+event_num                     : 400_000
+gen_input_source              : examples/exampledata/kafka_generate_input_logdata/logclass/test_input.jsonl
+kafka_partitions              : 1
+ng                            : 1
+  ↳ mode                      : logprep-ng
+  ↳ pipeline_config           : examples/exampledata/config/_benchmark_ng_pipeline.yml
+opensearch_url                : http://localhost:9200
+out                           : benchmarks/results/phase3_after.txt
+processed_index               : processed
+prometheus_multiproc_dir      : /tmp/logprep
+runs                          : [10, 10, 10]
+services                      : ['kafka', 'opensearch']
+sleep_after_compose_up_s      : 30
+sleep_after_logprep_start_s   : 10
+================================
+
+----- Run Round 1: 10 seconds -----
+--- RESULT ---
+run_seconds:            10
+events generated:       400_000
+generation time:        3.425 s
+measurement window:     10.000 s
+processed (OpenSearch): 35_017
+throughput:             3,501.67 docs/s
+--------------
+
+----- Run Round 2: 10 seconds -----
+--- RESULT ---
+run_seconds:            10
+events generated:       400_000
+generation time:        3.688 s
+measurement window:     10.000 s
+processed (OpenSearch): 33_171
+throughput:             3,317.06 docs/s
+--------------
+
+----- Run Round 3: 10 seconds -----
+--- RESULT ---
+run_seconds:            10
+events generated:       400_000
+generation time:        3.499 s
+measurement window:     10.000 s
+processed (OpenSearch): 31_933
+throughput:             3,193.28 docs/s
+--------------
+
+
+=== FINAL BENCHMARK SUMMARY ===
+runs:                  3
+total runtime:         30.000 s
+total processed:       100_121
+
+throughput (weighted): 3,337.34 docs/s
+throughput (median):   3,317.06 docs/s
+throughput (average):  3,337.34 docs/s
+throughput (min/max):  3,193.28 / 3,501.67 docs/s
+throughput (std dev):  155.19 docs/s
+================================
