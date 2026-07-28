@@ -7,14 +7,14 @@ pytest.importorskip("logprep.processor.clusterer")
 
 from logprep.processor.clusterer.signature_calculation.signature_phase import (
     LogRecord,
-    SignatureEngine,
-    SignatureTagParser,
     SignatureAggregator,
+    SignatureEngine,
     SignaturePhaseStreaming,
+    SignatureTagParser,
 )
 from tests.testdata.unit.clusterer.test_data import (
-    LogSaltModeTestComposition,
     DatasetSignatureProcessing,
+    LogSaltModeTestComposition,
 )
 
 

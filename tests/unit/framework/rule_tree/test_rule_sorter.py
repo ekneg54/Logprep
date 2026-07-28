@@ -6,13 +6,12 @@
 import pytest
 
 from logprep.filter.expression.filter_expression import (
-    Not,
     Always,
     CompoundFilterExpression,
-    StringFilterExpression,
     Exists,
+    Not,
+    StringFilterExpression,
 )
-
 from logprep.framework.rule_tree.rule_sorter import RuleSorter, RuleSorterException
 
 pytest.importorskip("logprep.processor.pre_detector")

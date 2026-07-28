@@ -3,7 +3,7 @@
 import logging
 from unittest import mock
 
-from logprep.util.context_managers import logqueue_listener, disable_loggers
+from logprep.util.context_managers import disable_loggers, logqueue_listener
 
 LOGGER = logging.getLogger()
 

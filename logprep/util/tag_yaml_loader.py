@@ -75,16 +75,16 @@ Examples:
 """
 
 import os.path
-from typing import Callable, Any
+from typing import Any, Callable
 
 from ruamel.yaml import (
     YAML,
-    Node,
     BaseConstructor,
+    MappingNode,
+    Node,
+    RoundTripConstructor,
     ScalarNode,
     SequenceNode,
-    MappingNode,
-    RoundTripConstructor,
 )
 
 

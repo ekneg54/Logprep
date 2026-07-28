@@ -1,7 +1,7 @@
 """This module is used create labeling schemas."""
 
 from json import JSONDecodeError
-from typing import Optional, List, Any
+from typing import Any, List, Optional
 
 from jsonref import loads
 

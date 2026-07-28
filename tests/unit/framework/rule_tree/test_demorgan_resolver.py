@@ -7,9 +7,9 @@ import pytest
 
 from logprep.filter.expression.filter_expression import (
     And,
-    Or,
-    Not,
     CompoundFilterExpression,
+    Not,
+    Or,
     StringFilterExpression,
 )
 from logprep.framework.rule_tree.demorgan_resolver import (

@@ -2977,7 +2977,7 @@ ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	60	300	60	\N	\N	\N	t	f	0	\N	master	0	\N	f	f
 --
 
 COPY public.realm_attribute (name, realm_id, value) FROM stdin;
-_browser_header.contentSecurityPolicyReportOnly	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	
+_browser_header.contentSecurityPolicyReportOnly	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff
 _browser_header.xContentTypeOptions	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	nosniff
 _browser_header.referrerPolicy	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	no-referrer
 _browser_header.xRobotsTag	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	none
@@ -2999,7 +2999,7 @@ displayNameHtml	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	<div class="kc-logo-text"><
 defaultSignatureAlgorithm	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	RS256
 offlineSessionMaxLifespanEnabled	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	false
 offlineSessionMaxLifespan	ccf97ff2-0fd1-472a-8041-b05bbe3ab0ff	5184000
-_browser_header.contentSecurityPolicyReportOnly	192c7eba-98c5-4d87-9f5f-059ac8515a9f	
+_browser_header.contentSecurityPolicyReportOnly	192c7eba-98c5-4d87-9f5f-059ac8515a9f
 _browser_header.xContentTypeOptions	192c7eba-98c5-4d87-9f5f-059ac8515a9f	nosniff
 _browser_header.referrerPolicy	192c7eba-98c5-4d87-9f5f-059ac8515a9f	no-referrer
 _browser_header.xRobotsTag	192c7eba-98c5-4d87-9f5f-059ac8515a9f	none
@@ -3025,7 +3025,7 @@ oauth2DeviceCodeLifespan	192c7eba-98c5-4d87-9f5f-059ac8515a9f	600
 oauth2DevicePollingInterval	192c7eba-98c5-4d87-9f5f-059ac8515a9f	5
 webAuthnPolicyRpEntityName	192c7eba-98c5-4d87-9f5f-059ac8515a9f	keycloak
 webAuthnPolicySignatureAlgorithms	192c7eba-98c5-4d87-9f5f-059ac8515a9f	ES256
-webAuthnPolicyRpId	192c7eba-98c5-4d87-9f5f-059ac8515a9f	
+webAuthnPolicyRpId	192c7eba-98c5-4d87-9f5f-059ac8515a9f
 webAuthnPolicyAttestationConveyancePreference	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
 webAuthnPolicyAuthenticatorAttachment	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
 webAuthnPolicyRequireResidentKey	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
@@ -3034,7 +3034,7 @@ webAuthnPolicyCreateTimeout	192c7eba-98c5-4d87-9f5f-059ac8515a9f	0
 webAuthnPolicyAvoidSameAuthenticatorRegister	192c7eba-98c5-4d87-9f5f-059ac8515a9f	false
 webAuthnPolicyRpEntityNamePasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	keycloak
 webAuthnPolicySignatureAlgorithmsPasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	ES256
-webAuthnPolicyRpIdPasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	
+webAuthnPolicyRpIdPasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f
 webAuthnPolicyAttestationConveyancePreferencePasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
 webAuthnPolicyAuthenticatorAttachmentPasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
 webAuthnPolicyRequireResidentKeyPasswordless	192c7eba-98c5-4d87-9f5f-059ac8515a9f	not specified
@@ -5417,4 +5417,3 @@ ALTER TABLE ONLY public.identity_provider_config
 --
 -- PostgreSQL database dump complete
 --
-

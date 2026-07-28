@@ -7,16 +7,24 @@ from unittest import mock
 
 import pytest
 
+from logprep.processor.base.exceptions import FieldExistsWarning
 from logprep.util.configuration import Configuration
 from logprep.util.helper import (
     FieldValue,
     Missing,
     Skip,
+    add_fields_to,
     camel_to_snake,
     field_value_validator,
     get_dotted_field_list,
     get_dotted_field_value,
+    get_dotted_field_value_with_missing,
+    get_dotted_field_values,
+    get_field_value,
+    get_field_value_no_slice,
     get_versions_string,
+    has_dotted_field,
+    join_dotted_fields,
     merge_collision_handler,
     merge_mutating_collision_handler,
     pop_dotted_field_value,
@@ -544,3 +552,228 @@ class TestFieldValueValidator:
                 field_value_validator(None, attribute, value)
         else:
             field_value_validator(None, attribute, value)
+
+
+class TestGetDottedFieldValueWithMissing:
+
+    def test_returns_value_when_exists(self):
+        event = {"a": {"b": "hello"}}
+        result = get_dotted_field_value_with_missing(event, "a.b")
+        assert result == "hello"
+
+    def test_returns_missing_when_not_exists(self):
+        event = {"a": 1}
+        result = get_dotted_field_value_with_missing(event, "a.b")
+        assert result is Missing.MISSING
+
+    def test_returns_missing_for_empty_event(self):
+        event = {}
+        result = get_dotted_field_value_with_missing(event, "field")
+        assert result is Missing.MISSING
+
+    def test_returns_none_value_when_exists(self):
+        event = {"a": None}
+        result = get_dotted_field_value_with_missing(event, "a")
+        assert result is None
+
+
+class TestGetFieldValue:
+
+    def test_simple_field(self):
+        event = {"a": {"b": "world"}}
+        result = get_field_value(event, ["a", "b"])
+        assert result == "world"
+
+    def test_missing_field(self):
+        event = {"a": 1}
+        result = get_field_value(event, ["a", "b"])
+        assert result is Missing.MISSING
+
+    def test_empty_fields(self):
+        event = {"a": 1}
+        result = get_field_value(event, [])
+        assert result == event
+
+    def test_deeply_nested(self):
+        event = {"x": {"y": {"z": 42}}}
+        result = get_field_value(event, ["x", "y", "z"])
+        assert result == 42
+
+    def test_none_value(self):
+        event = {"a": None}
+        result = get_field_value(event, ["a"])
+        assert result is None
+
+
+class TestGetFieldValueNoSlice:
+
+    def test_simple_field(self):
+        event = {"x": {"y": 42}}
+        result = get_field_value_no_slice(event, ["x", "y"])
+        assert result == 42
+
+    def test_missing_field(self):
+        event = {"x": 1}
+        result = get_field_value_no_slice(event, ["x", "y"])
+        assert result is Missing.MISSING
+
+    def test_non_dict_returns_missing(self):
+        event = {"x": "not_a_dict"}
+        result = get_field_value_no_slice(event, ["x", "y"])
+        assert result is Missing.MISSING
+
+    def test_empty_fields(self):
+        event = {"x": 1}
+        result = get_field_value_no_slice(event, [])
+        assert result == event
+
+
+class TestGetDottedFieldValues:
+
+    def test_batch_extraction(self):
+        event = {"a": 1, "b": 2, "c": 3}
+        result = get_dotted_field_values(event, ["a", "b", "c"])
+        assert result == {"a": 1, "b": 2, "c": 3}
+
+    def test_batch_with_missing_defaults_to_none(self):
+        event = {"a": 1}
+        result = get_dotted_field_values(event, ["a", "missing"])
+        assert result == {"a": 1, "missing": None}
+
+    def test_batch_with_on_missing_skip(self):
+        event = {"a": 1}
+        result = get_dotted_field_values(
+            event, ["a", "missing"], on_missing=lambda _: Skip.SKIP
+        )
+        assert result == {"a": 1}
+        assert "missing" not in result
+
+    def test_batch_with_on_missing_default(self):
+        event = {"a": 1}
+        result = get_dotted_field_values(
+            event, ["a", "missing"], on_missing=lambda _: "default"
+        )
+        assert result == {"a": 1, "missing": "default"}
+
+    def test_batch_with_nested_fields(self):
+        event = {"x": {"a": 10}, "y": {"b": 20}}
+        result = get_dotted_field_values(event, ["x.a", "y.b"])
+        assert result == {"x.a": 10, "y.b": 20}
+
+    def test_empty_field_list(self):
+        event = {"a": 1}
+        result = get_dotted_field_values(event, [])
+        assert result == {}
+
+
+class TestHasDottedField:
+
+    def test_existing_field(self):
+        event = {"a": {"b": "val"}}
+        assert has_dotted_field(event, "a.b") is True
+
+    def test_missing_field(self):
+        event = {"a": 1}
+        assert has_dotted_field(event, "a.b") is False
+
+    def test_none_value_allow_none(self):
+        event = {"a": None}
+        assert has_dotted_field(event, "a", allow_none=True) is True
+
+    def test_none_value_not_allow_none(self):
+        event = {"a": None}
+        assert has_dotted_field(event, "a", allow_none=False) is False
+
+    def test_empty_event(self):
+        event = {}
+        assert has_dotted_field(event, "a") is False
+
+    def test_top_level_field(self):
+        event = {"key": "value"}
+        assert has_dotted_field(event, "key") is True
+
+
+class TestJoinDottedFields:
+
+    def test_simple(self):
+        assert join_dotted_fields(["x.y", "z"]) == "x.y.z"
+
+    def test_single(self):
+        assert join_dotted_fields(["a"]) == "a"
+
+    def test_empty(self):
+        assert join_dotted_fields([]) == ""
+
+
+class TestAddFieldsTo:
+
+    def test_add_new_field(self):
+        event = {}
+        add_fields_to(event, {"hello": "world"})
+        assert event == {"hello": "world"}
+
+    def test_add_nested_field(self):
+        event = {}
+        add_fields_to(event, {"a.b.c": "deep"})
+        assert event == {"a": {"b": {"c": "deep"}}}
+
+    def test_overwrite_existing(self):
+        event = {"key": "old"}
+        add_fields_to(event, {"key": "new"}, overwrite_target=True)
+        assert event == {"key": "new"}
+
+    def test_skip_none(self):
+        event = {}
+        add_fields_to(event, {"a": None, "b": "keep"})
+        assert event == {"b": "keep"}
+
+    def test_no_skip_none(self):
+        event = {}
+        add_fields_to(event, {"a": None, "b": "keep"}, skip_none=False)
+        assert event == {"a": None, "b": "keep"}
+
+    def test_merge_dict(self):
+        event = {"a": {"x": 1}}
+        add_fields_to(event, {"a": {"y": 2}}, merge_with_target=True)
+        assert event == {"a": {"x": 1, "y": 2}}
+
+    def test_merge_list(self):
+        event = {"a": [1, 2]}
+        add_fields_to(event, {"a": [3, 4]}, merge_with_target=True)
+        assert event == {"a": [1, 2, 3, 4]}
+
+    def test_merge_scalar_to_list(self):
+        event = {"a": [1]}
+        add_fields_to(event, {"a": 2}, merge_with_target=True)
+        assert event == {"a": [1, 2]}
+
+    def test_merge_scalar_to_scalar_raises(self):
+        event = {"a": 1}
+        with pytest.raises(FieldExistsWarning):
+            add_fields_to(event, {"a": 2}, merge_with_target=True)
+
+    def test_field_exists_warning_on_conflict(self):
+        from logprep.processor.base.exceptions import FieldExistsWarning
+
+        event = {"key": "existing"}
+        with pytest.raises(FieldExistsWarning):
+            add_fields_to(event, {"key": "new"})
+
+    def test_merge_and_overwrite_raises(self):
+        event = {"a": 1}
+        with pytest.raises(ValueError):
+            add_fields_to(event, {"a": 2}, merge_with_target=True, overwrite_target=True)
+
+
+class TestPopDottedFieldMissing:
+
+    def test_pop_missing_field_returns_missing(self):
+        event = {"a": 1}
+        result = pop_dotted_field_value(event, "missing")
+        assert result is Missing.MISSING
+
+    def test_pop_missing_field_keep_empty(self):
+        event = {"a": 1}
+        result = pop_dotted_field_value(event, "missing", False)
+        assert result is Missing.MISSING
+        assert event == {"a": 1}

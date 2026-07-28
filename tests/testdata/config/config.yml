@@ -1,7 +1,6 @@
 version: 1
 process_count: 3
 timeout: 0.1
-
 pipeline:
   - dissector:
       type: dissector
@@ -28,7 +27,6 @@ pipeline:
       rules:
         - tests/testdata/unit/pseudonymizer/rules/
       max_cached_pseudonyms: 1000000
-
 input:
   kafka_input:
     type: confluentkafka_input

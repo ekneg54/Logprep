@@ -757,12 +757,11 @@ fn pop_dotted_field_value(
 
 **Python-Migration** (`logprep/util/helper.py`):
 
-```python
-from logprep._rust import pop_dotted_field_value as _pop_rust
+Direct re-export (no wrapper needed — the Rust function returns `MISSING` for missing fields,
+matching the original Python implementation):
 
-def pop_dotted_field_value(event, dotted_field, drop_empty=True):
-    result = _pop_rust(event, dotted_field, drop_empty)
-    return MISSING if result is None else result
+```python
+from logprep._rust import pop_dotted_field_value  # noqa: F401
 ```
 
 **Verifizierung:**

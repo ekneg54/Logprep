@@ -2,7 +2,11 @@
 # pylint: disable=missing-docstring
 import pytest
 
-from logprep.processor.replacer.rule import ReplacerRule, ReplacementTemplate, Replacement
+from logprep.processor.replacer.rule import (
+    Replacement,
+    ReplacementTemplate,
+    ReplacerRule,
+)
 
 
 class TestReplacerRule:

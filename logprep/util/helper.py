@@ -1,13 +1,11 @@
 """This module contains helper functions that are shared by different modules."""
 
-import copy
 import functools
-import itertools
 import re
 import sys
 import typing
 from enum import Enum, auto
-from functools import lru_cache, partial, reduce
+from functools import partial
 from importlib.metadata import version
 from os import remove
 from string import Template
@@ -16,16 +14,27 @@ from typing import (
     Callable,
     Iterable,
     Optional,
-    Sequence,
     TypeAlias,
     TypeVar,
     Union,
-    cast,
 )
 
 from attrs import Attribute
 
-from logprep.processor.base.exceptions import FieldExistsWarning
+from logprep._rust import (  # noqa: F401
+    add_fields_to,
+    field_list_to_dotted_field,
+    get_dotted_field_list,
+    get_dotted_field_value,
+    get_dotted_field_value_with_missing,
+    get_dotted_field_values,
+    get_field_value,
+    get_field_value_no_slice,
+    has_dotted_field,
+    join_dotted_fields,
+    pop_dotted_field_value,
+)
+from logprep.processor.base.exceptions import FieldExistsWarning  # noqa: F401
 from logprep.util.defaults import DEFAULT_CONFIG_LOCATION
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -67,553 +76,100 @@ class DottedTemplate(Template):
     braceidpattern = r"(?a:(?:\\.|[^.$\\{}])+(?:\.(?:\\.|[^.$\\{}])+)*)"
 
 
-def _add_and_overwrite_key(event: dict[str, FieldValue], key: str) -> dict[str, FieldValue]:
-    current_value = event.get(key)
-    if isinstance(current_value, dict):
-        return current_value
-    sub_dict: dict[str, FieldValue] = {}
-    event.update({key: sub_dict})
-    return sub_dict
+# =============================================================================
+# Thin Wrappers (Step 1h)
+# =============================================================================
+
+append_as_list = partial(add_fields_to, merge_with_target=True)
 
 
-def _add_and_not_overwrite_key(event: dict[str, FieldValue], key: str) -> dict[str, FieldValue]:
-    current_value = event.get(key)
-    if isinstance(current_value, dict):
-        return current_value
-    if key in event:
-        raise KeyError("key exists")
-    sub_dict: dict[str, FieldValue] = {}
-    event.update({key: sub_dict})
-    return sub_dict
-
-
-def _add_field_to(
-    event: dict[str, FieldValue],
-    field: tuple[FieldRef, FieldValue],
-    rule: Optional["Rule"],
-    merge_with_target: bool = False,
-    overwrite_target: bool = False,
-) -> None:
-    """
-    Add content to the target_field in the given event. target_field can be a dotted subfield.
-    In case of missing fields, all intermediate fields will be created.
-
-    Parameters
-    ----------
-    event: dict
-        Original log-event that logprep is currently processing
-    field: tuple
-        A key value pair describing the field that should be added.
-        The key is the dotted subfield string indicating the target.
-        The value is the content that should be added to the named target.
-        The content can be of type str, float, int, list, dict.
-    rule: Rule, optional
-        A rule that initiated the field addition, is used for proper error handling.
-    merge_with_target: bool, optional
-        Flag that determines whether the content should be merged with an existing target_field.
-        Defaults to False.
-    overwrite_target: bool, optional
-        Flag that determines whether the target_field should be overwritten by content.
-        Defaults to False.
-
-    Raises
-    ------
-    FieldExistsWarning
-        If the target_field already exists and overwrite_target_field is False,
-        or if extends_lists is True but the existing field is not a list.
-    """
-    if merge_with_target and overwrite_target:
-        raise ValueError("Can't merge with and overwrite a target field at the same time")
-    target_field, content = field
-    field_path = get_dotted_field_list(target_field)
-    target_key = field_path[-1]
-
-    if overwrite_target:
-        target_parent = reduce(_add_and_overwrite_key, field_path[:-1], event)
-        target_parent[target_key] = copy.deepcopy(content)
-        return
+def _add_field_to_silent_fail(
+    event, field, rule=None, merge_with_target=False, overwrite_target=False
+):
+    """Wrapper for single field add with silent failure. Used by metrics instrumentation."""
     try:
-        target_parent = reduce(_add_and_not_overwrite_key, field_path[:-1], event)
-    except KeyError as error:
-        raise FieldExistsWarning(rule, event, [target_field]) from error
-    existing_value = target_parent.get(target_key)
-    if existing_value is None:
-        target_parent[target_key] = copy.deepcopy(content)
-        return
-    if not merge_with_target:
-        raise FieldExistsWarning(rule, event, [target_field])
-    if isinstance(existing_value, dict) and isinstance(content, dict):
-        existing_value.update(content)
-        target_parent[target_key] = existing_value
-    elif isinstance(existing_value, list) and isinstance(content, list):
-        existing_value.extend(content)
-        target_parent[target_key] = existing_value
-    elif isinstance(existing_value, list) and isinstance(content, (int, float, str, bool)):
-        target_parent[target_key] = existing_value + [content]
-    elif isinstance(existing_value, (int, float, str, bool)) and isinstance(content, list):
-        target_parent[target_key] = [existing_value, *content]
-    else:
-        # FIXME combining ll 117 & 135, overwrite_target can never be True here
-        if not overwrite_target:
-            raise FieldExistsWarning(rule, event, [target_field])
-        target_parent[target_key] = [existing_value, copy.deepcopy(content)]
-
-
-def _add_field_to_silent_fail(*args, **kwargs) -> None | str:
-    """
-    Adds a field to an object, ignoring the FieldExistsWarning if the field already exists.
-    Is only needed in the add_batch_to map function. Without this, the map would terminate early.
-
-    Parameters
-    ----------
-        args: tuple
-            Positional arguments to pass to the add_field_to function.
-        kwargs: dict
-            Keyword arguments to pass to the add_field_to function.
-
-    Returns
-    -------
-        The field that was attempted to be added, if the field already exists.
-    """
-    try:
-        _add_field_to(*args, **kwargs)
+        add_fields_to(
+            event,
+            dict([field]),
+            rule=rule,
+            merge_with_target=merge_with_target,
+            overwrite_target=overwrite_target,
+        )
     except FieldExistsWarning as error:
         return error.skipped_fields[0]
     return None
 
 
-def add_fields_to(
-    event: dict,
-    fields: dict,
-    rule: Optional["Rule"] = None,
-    merge_with_target: bool = False,
-    overwrite_target: bool = False,
-    skip_none: bool = True,
-) -> None:
+def add_and_overwrite(event, fields, rule, *_):
+    """Wrapper for add_field_to with overwrite_target=True."""
+    add_fields_to(event, fields, rule, overwrite_target=True)
+
+
+def append(event, field, separator, rule):
+    """Appends to event"""
+    target_field, content = list(field.items())[0]
+    target_value = get_dotted_field_value(event, target_field)
+    if not isinstance(target_value, list):
+        target_value = "" if target_value is None else target_value
+        target_value = f"{target_value}{separator}{content}"
+        add_and_overwrite(event, fields={target_field: target_value}, rule=rule)
+    else:
+        append_as_list(event, field)
+
+
+def get_source_fields_dict(event, rule):
+    """Returns a dict with dotted fields as keys and target values as values"""
+    source_fields = rule.source_fields
+    return {field: get_dotted_field_value(event, field) for field in source_fields}
+
+
+def copy_fields_to_event(
+    target_event,
+    source_event,
+    dotted_field_names,
+    *,
+    skip_missing=True,
+    merge_with_target=False,
+    overwrite_target=False,
+    rule=None,
+):
     """
-    Handles the batch addition operation while raising a FieldExistsWarning with
-    all unsuccessful targets.
+    Copies fields from source_event to target_event.
 
     Parameters
     ----------
-        event: dict
-            The event object to which fields are to be added.
-        fields: dict
-            A dict with key value pairs describing the fields that should be added.
-            The key is the dotted subfield string indicating the target.
-            The value is the content that should be added to the named target.
-            The content can be of type: str, float, int, list, dict.
-        rule: Rule, optional
-            A rule that initiated the field addition, is used for proper error handling.
-        merge_with_target: bool, optional
-            A boolean indicating whether to merge if the target field already exists.
-            Defaults to False.
-        overwrite_target: bool, optional
-            A boolean indicating whether to overwrite the target field if it already exists.
-            Defaults to False.
-        skip_none: bool, optional
-            A boolean indicating whether to filter out None-valued fields. Defaults to True.
-
-    Raises
-    ------
-        FieldExistsWarning: If there are targets to which the content could not be added due to
-        field existence restrictions.
+    target_event : dict
+        The field dictionary where fields are being added to in-place
+    source_event : dict
+        The field dictionary where field values are being read from
+    dotted_field_names : Iterable[str]
+        The list of (potentially dotted) field names to copy
+    skip_missing : bool, optional
+        Controls whether missing fields should be skipped or defaulted to None, by default True
+    merge_with_target : bool, optional
+        Controls whether already existing fields should be merged as a list, by default False
+    overwrite_target : bool, optional
+        Controls whether already existing fields should be overwritten, by default False
+    rule : Rule, optional
+        Contextual info for error handling, by default None
     """
-    # filter out None values
-    fields = {key: value for key, value in fields.items() if not skip_none or value is not None}
-    number_fields = len(dict(fields))
-    if number_fields == 1:
-        _add_field_to(event, list(fields.items())[0], rule, merge_with_target, overwrite_target)
-        return
-    unsuccessful_targets = map(
-        _add_field_to_silent_fail,
-        itertools.repeat(event, number_fields),
-        fields.items(),
-        itertools.repeat(rule, number_fields),
-        itertools.repeat(merge_with_target, number_fields),
-        itertools.repeat(overwrite_target, number_fields),
+    on_missing_result = SKIP if skip_missing else None
+    source_fields = get_dotted_field_values(
+        source_event, dotted_field_names, on_missing=lambda _: on_missing_result
     )
-    unsuccessful_targets_resolved = [item for item in unsuccessful_targets if item is not None]
-    if unsuccessful_targets_resolved:
-        raise FieldExistsWarning(rule, event, unsuccessful_targets_resolved)
+    add_fields_to(
+        target_event,
+        source_fields,
+        rule=rule,
+        overwrite_target=overwrite_target,
+        merge_with_target=merge_with_target,
+        skip_none=False,
+    )
 
 
-def _get_slice_arg(slice_item) -> int | None:
-    return int(slice_item) if slice_item else None
-
-
-def _get_item(container: FieldValue, key: str) -> FieldValue:
-    """
-    Retrieves the value associated with given key from the container.
-
-    This function supports:
-    - Getting a value by name from a dict ({ "K": X }, "K") -> X
-    - Getting a value by index from a list ([X, Y, Z], "1") -> Y
-    - Getting a value by slice from a list ([X, Y, Z], "1:") -> [Y, Z]
-
-    The retrieved value itself can be a container type,
-    thus this function can be used to traverse a nested data structure.
-
-    Parameters
-    ----------
-    container : FieldValue
-        Container object where data is read from
-    key : str
-        Dictionary key, index or slice spec refering to the container
-
-    Returns
-    -------
-    FieldValue
-        The container value which is referenced by the key
-
-    Raises
-    ------
-    KeyError
-        The container is a dict, but key does not exist in it
-    IndexError
-        The container is a list, but key does not represent a valid index in it
-    ValueError
-        The container is not a dict, but key is neither slice nor integer index
-    TypeError
-        The key is not a valid slice or the container is neither a dict nor a list
-    """
-    try:
-        return dict.__getitem__(cast(dict[str, FieldValue], container), key)
-    except TypeError:
-        index_or_slice: slice | int
-        if ":" in key:
-            slice_args = map(_get_slice_arg, key.split(":"))
-            index_or_slice = slice(*slice_args)
-        else:
-            index_or_slice = int(key)
-        return list.__getitem__(cast(list[FieldValue], container), index_or_slice)
-
-
-def get_dotted_field_value(event: dict[str, FieldValue], dotted_field: str) -> FieldValue:
-    """
-    Returns the value of a requested dotted_field by iterating over the event dictionary until the
-    field was found. In case the field could not be found None is returned.
-
-    Parameters
-    ----------
-    event: dict[str, FieldValue]
-        The event from which the dotted field value should be extracted.
-    dotted_field: str
-        The dotted field name which identifies the requested value.
-
-    Returns
-    -------
-    FieldValue
-        The value of the requested dotted field, which can be None.
-        None is also returnd when the field could not be found and silent_fail is True.
-
-    Raises
-    ------
-    KeyError, ValueError, TypeError, IndexError
-        Different errors which can be raised on missing fields and silent_fail is False.
-    """
-    current: FieldValue = event
-    try:
-        for field in get_dotted_field_list(dotted_field):
-            current = _get_item(current, field)
-        return current
-    except (KeyError, ValueError, TypeError, IndexError):
-        return None
-
-
-def get_dotted_field_value_with_missing(
-    event: dict[str, FieldValue], dotted_field: str
-) -> FieldValue | Missing:
-    """
-    Returns the value of a requested dotted_field by iterating over the event dictionary until the
-    field was found. In case the field could not be found None is returned.
-
-    Parameters
-    ----------
-    event: dict[str, FieldValue]
-        The event from which the dotted field value should be extracted.
-    dotted_field: str
-        The dotted field name which identifies the requested value.
-
-    Returns
-    -------
-    FieldValue | Missing
-        The value of the requested dotted field, which can be None.
-        Or :code:`MISSING` if the field could not be found.
-
-    Raises
-    ------
-    KeyError, ValueError, TypeError, IndexError
-        Different errors which can be raised on missing fields and silent_fail is False.
-    """
-    current: FieldValue = event
-    try:
-        for field in get_dotted_field_list(dotted_field):
-            current = _get_item(current, field)
-        return current
-    except (KeyError, ValueError, TypeError, IndexError):
-        return MISSING
-
-
-def get_field_value(event: dict[str, FieldValue], fields: Iterable[str]) -> FieldValue | Missing:
-    """Low-level function to retrieve the value referenced by the sequence
-    of keys/fields.
-    This function assumes, that the dotted fields have already been resolved and
-    that all remaining dots are to be interpreted as part of their respective field names.
-    Also, no slicing is supported.
-
-    Parameters
-    ----------
-    event : dict[str, FieldValue]
-        The event from which the field value should be extracted.
-    fields : Iterable[str]
-        The field sequence which identifies the requested value.
-
-    Returns
-    -------
-    FieldValue | Missing
-        The value of the requested dotted field, which can be None.
-        Or :code:`MISSING` if the field could not be found.
-    """
-    current: FieldValue = event
-    try:
-        for field in fields:
-            current = _get_item(current, field)
-        return current
-    except (KeyError, ValueError, TypeError, IndexError):
-        return MISSING
-
-
-def get_field_value_no_slice(
-    event: dict[str, FieldValue], fields: Iterable[str]
-) -> FieldValue | Missing:
-    """Optimized low-level function to retrieve the value referenced by the sequence
-    of keys/fields.
-    This function assumes, that the dotted fields have already been resolved and
-    that all remaining dots are to be interpreted as part of their respective field names.
-    Also, no slicing is supported.
-
-    Parameters
-    ----------
-    event : dict[str, FieldValue]
-        The event from which the field value should be extracted.
-    fields : Iterable[str]
-        The field sequence which identifies the requested value.
-
-    Returns
-    -------
-    FieldValue | Missing
-        The value of the requested dotted field, which can be None.
-        Or :code:`MISSING` if the field could not be found.
-    """
-    current: FieldValue = event
-    for field in fields:
-        try:
-            current = typing.cast(dict[str, FieldValue], current)[field]
-        except (KeyError, TypeError):
-            return MISSING
-    return current
-
-
-def get_dotted_field_values(
-    event: dict,
-    dotted_fields: Iterable[str],
-    on_missing: Callable[[str], FieldValue | Skip] = lambda _: None,
-) -> dict[str, FieldValue]:
-    """
-    Extract the subset of fields from the dict by using the list of (potentially dotted)
-    field names as an allow list.
-    The behavior for fields targeted by the list but missing in the dict can be controlled
-    by a callback.
-    The callback allows for providing a replacement value, or - by returning SKIP - can
-    instruct the method to omit the field entirely from the extracted dict.
-
-
-    Parameters
-    ----------
-    event : dict
-        The (potentially nested) dict where the values are sourced from
-    dotted_fields : Iterable[str]
-        The (potentially dotted) list of field names to extract
-    on_missing : Callable[[str], FieldValue | Skip], optional
-        The callback to control the behavior for missing fields, by default
-        `lambda _: None` which returns missing fields with `None` value
-
-    Returns
-    -------
-    dict[str, FieldValue]
-        The (potentially nested) sub-dict
-    """
-    result: dict[str, FieldValue] = {}
-    for field_to_copy in dotted_fields:
-        value = get_dotted_field_value_with_missing(event, field_to_copy)
-        if value is MISSING:
-            fallback_value = on_missing(field_to_copy)
-            if fallback_value is not SKIP:
-                result[field_to_copy] = fallback_value
-            continue
-        result[field_to_copy] = value
-    return result
-
-
-def has_dotted_field(
-    event: dict[str, FieldValue], dotted_field: str, allow_none: bool = True
-) -> bool:
-    """Check if the given dotted field can be found in in data structure.
-
-    Parameters
-    ----------
-    event : dict[str, FieldValue]
-        The data structure which might contain the field.
-    dotted_field : str
-        The dotted field descriptor which identifies the field.
-    allow_none: bool, optional
-        Whether fields with value :code:`None` are considered present, defaults to :code:`True`.
-
-    Returns
-    -------
-    bool
-        Whether the field could be found in the data structure.
-    """
-    if allow_none:
-        return get_dotted_field_value_with_missing(event, dotted_field) is not MISSING
-    return get_dotted_field_value(event, dotted_field) is not None
-
-
-@lru_cache(maxsize=100000)
-def get_dotted_field_list(dotted_field: str) -> Sequence[str]:
-    """Make lookup of dotted field in the dotted_field_lookup_table and ensures
-    it is added if not found. Additionally, the string will be interned for faster
-    followup lookups.
-
-    Parameters
-    ----------
-    dotted_field : str
-        the dotted field input
-
-    Returns
-    -------
-    Sequence[str]
-        a readonly sequence keys for dictionary iteration
-    """
-    if dotted_field.find("\\") == -1:
-        return dotted_field.split(".")
-
-    result = []
-
-    char_buffer: list[str] = []
-    itr = iter(dotted_field)
-    for c in itr:
-        match (c):
-            case ".":
-                result.append("".join(char_buffer))
-                char_buffer = []
-            case "\\":
-                try:
-                    char_buffer.append(next(itr))
-                except StopIteration:
-                    char_buffer.append("\\")
-            case _:
-                char_buffer.append(c)
-
-    result.append("".join(char_buffer))
-    return result
-
-
-def field_list_to_dotted_field(field_list: Iterable[str]) -> str:
-    """Combines a list of fields (or rather key names) to a single dotted field.
-    The names are joined using dots and already existing dots will be considered
-    part of the name, meaning they are escaped in the dotted representation.
-    For instance, :code:`x.y` and :code:`z` would be mapped to :code:`x\\.y.z` and
-    joining :code:`x\\.y` and :code:`z` would result in :code:`x\\\\.y.z`.
-
-    Parameters
-    ----------
-    field_list : Iterable[str]
-        The list of fields to be joined.
-
-    Returns
-    -------
-    str
-        A single dotted field.
-    """
-    return ".".join(field.replace(".", "\\.") for field in field_list)
-
-
-def join_dotted_fields(dotted_fields: Iterable[str]) -> str:
-    """Combines a list of dotted fields to a single dotted field by joining them
-    in order and without escaping already existing dots or other characters additionally.
-    For instance, :code:`x.y` and :code:`z` would be mapped to :code:`x.y.z` and
-    joining :code:`x\\.y` and :code:`z` would result in :code:`x\\.y.z`.
-
-    Parameters
-    ----------
-    dotted_fields : Iterable[str]
-        The list of fields to be joined.
-
-    Returns
-    -------
-    str
-        A single dotted field.
-    """
-    return ".".join(dotted_fields)
-
-
-def pop_dotted_field_value(
-    event: dict[str, FieldValue], dotted_field: str, drop_empty: bool = True
-) -> FieldValue | Missing:
-    """
-    Remove and return dotted field. Returns None is field does not exist.
-
-    Parameters
-    ----------
-    event: dict
-        The event from which the dotted field value should be extracted
-    dotted_field: str
-        The dotted field name which identifies the requested value
-    drop_empty: bool
-        Whether to drop empty dicts along the way
-
-    Returns
-    -------
-    FieldValue | Missing
-        The value of the requested dotted field or the MISSING sentinel
-    """
-    if drop_empty:
-        return _pop_field_value_and_drop_empty(event, list(get_dotted_field_list(dotted_field)))
-    return _pop_field_value(event, dotted_field)
-
-
-def _pop_field_value(event: dict[str, FieldValue], dotted_field: str) -> FieldValue | Missing:
-    *parent_fields, field = get_dotted_field_list(dotted_field)
-    parent_field_value = get_field_value(event, parent_fields)
-    if parent_field_value and isinstance(parent_field_value, dict) and field in parent_field_value:
-        return parent_field_value.pop(field)
-    return MISSING
-
-
-def _pop_field_value_and_drop_empty(
-    sub_dict: FieldValue,
-    field_list: list[str],
-) -> FieldValue | Missing:
-    """
-    Iterates recursively over the given dictionary retrieving the dotted field. If set the source
-    field will be removed. When again going back up the stack trace it deletes the empty left over
-    dicts.
-    """
-    next_key = field_list.pop(0)
-    if isinstance(sub_dict, dict) and next_key in sub_dict:
-        if not field_list:
-            # next_key is the final key in the traversion
-            leaf_value = sub_dict[next_key]
-            del sub_dict[next_key]
-            return leaf_value
-        field_value = _pop_field_value_and_drop_empty(sub_dict[next_key], field_list)
-        # if remaining subdict is empty delete it
-        if not sub_dict[next_key]:
-            del sub_dict[next_key]
-        return field_value
-    return MISSING
+# =============================================================================
+# Non-dotted-field Helpers (unchanged)
+# =============================================================================
 
 
 def recursive_compare(test_output, expected_output):
@@ -673,79 +229,6 @@ def snake_to_camel(snake: str) -> str:
 
     camel = "".join(component.title() for component in components)
     return camel
-
-
-append_as_list = partial(add_fields_to, merge_with_target=True)
-
-
-def copy_fields_to_event(
-    target_event: dict,
-    source_event: dict,
-    dotted_field_names: Iterable[str],
-    *,
-    skip_missing: bool = True,
-    merge_with_target: bool = False,
-    overwrite_target: bool = False,
-    rule: Optional["Rule"] = None,
-) -> None:
-    """
-    Copies fields from source_event to target_event.
-    The function behaves similar to add_fields_to.
-
-    Parameters
-    ----------
-    target_event : dict
-        The field dictionary where fields are being added to in-place
-    source_event : dict
-        The field dictionary where field values are being read from
-    dotted_field_names : Iterable[str]
-        The list of (potentially dotted) field names to copy
-    skip_missing : bool, optional
-        Controls whether missing fields should be skipped or defaulted to None, by default True
-    merge_with_target : bool, optional
-        Controls whether already existing fields should be merged as a list, by default False
-    overwrite_target : bool, optional
-        Controls whether already existing fields should be overwritten, by default False
-    rule : Rule, optional
-        Contextual info for error handling, by default None
-    """
-    on_missing_result = SKIP if skip_missing else None
-    source_fields = get_dotted_field_values(
-        source_event, dotted_field_names, on_missing=lambda _: on_missing_result
-    )
-    add_fields_to(
-        target_event,
-        source_fields,
-        rule=rule,
-        overwrite_target=overwrite_target,
-        merge_with_target=merge_with_target,
-        skip_none=False,
-    )
-
-
-def add_and_overwrite(event, fields, rule, *_):
-    """Wrapper for add_field_to"""
-    add_fields_to(event, fields, rule, overwrite_target=True)
-
-
-def append(event, field, separator, rule):
-    """Appends to event"""
-    target_field, content = list(field.items())[0]
-    target_value = get_dotted_field_value(event, target_field)
-    if not isinstance(target_value, list):
-        target_value = "" if target_value is None else target_value
-        target_value = f"{target_value}{separator}{content}"
-        add_and_overwrite(event, fields={target_field: target_value}, rule=rule)
-    else:
-        append_as_list(event, field)
-
-
-def get_source_fields_dict(event, rule):
-    """Returns a dict with dotted fields as keys and target values as values"""
-    source_fields = rule.source_fields
-    source_field_values = map(partial(get_dotted_field_value, event), source_fields)
-    source_field_dict = dict(zip(source_fields, source_field_values))
-    return source_field_dict
 
 
 def get_versions_string(

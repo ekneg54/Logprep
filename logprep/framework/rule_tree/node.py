@@ -1,9 +1,11 @@
 """This module implements the tree node functionality for the tree model."""
 
-from typing import Optional, List
+from typing import List, Optional
 
-from logprep.filter.expression.filter_expression import FilterExpression
-from logprep.filter.expression.filter_expression import KeyDoesNotExistError
+from logprep.filter.expression.filter_expression import (
+    FilterExpression,
+    KeyDoesNotExistError,
+)
 
 
 class Node:

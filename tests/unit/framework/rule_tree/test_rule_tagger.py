@@ -5,7 +5,11 @@
 
 import pytest
 
-from logprep.filter.expression.filter_expression import StringFilterExpression, Not, Exists
+from logprep.filter.expression.filter_expression import (
+    Exists,
+    Not,
+    StringFilterExpression,
+)
 from logprep.framework.rule_tree.rule_tagger import RuleTagger
 
 pytest.importorskip("logprep.processor.pre_detector")

@@ -5,8 +5,13 @@
 
 import pytest
 
-from logprep.filter.expression.filter_expression import And, Or, Not, StringFilterExpression
-from logprep.framework.rule_tree.rule_segmenter import RuleSegmenter, CnfToDnfConverter
+from logprep.filter.expression.filter_expression import (
+    And,
+    Not,
+    Or,
+    StringFilterExpression,
+)
+from logprep.framework.rule_tree.rule_segmenter import CnfToDnfConverter, RuleSegmenter
 
 string_filter_expression_1 = StringFilterExpression(["key1"], "value1")
 string_filter_expression_2 = StringFilterExpression(["key2"], "value2")

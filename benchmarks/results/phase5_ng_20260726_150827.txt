@@ -126,20 +126,20 @@ throughput (min/max):  0.00 / 0.00 docs/s
 throughput (std dev):  0.00 docs/s
 ================================
 
- Network compose_kafka Creating 
- Network compose_kafka Created 
- Network compose_opensearch Creating 
- Network compose_opensearch Created 
- Volume compose_opensearch-data Creating 
- Volume compose_opensearch-data Created 
- Container kafka Creating 
- Container opensearch Creating 
- Container opensearch Created 
- Container kafka Created 
- Container opensearch Starting 
- Container kafka Starting 
- Container kafka Started 
- Container opensearch Started 
+ Network compose_kafka Creating
+ Network compose_kafka Created
+ Network compose_opensearch Creating
+ Network compose_opensearch Created
+ Volume compose_opensearch-data Creating
+ Volume compose_opensearch-data Created
+ Container kafka Creating
+ Container opensearch Creating
+ Container opensearch Created
+ Container kafka Created
+ Container opensearch Starting
+ Container kafka Starting
+ Container kafka Started
+ Container opensearch Started
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 
@@ -194,32 +194,32 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     |     ~~~~~~~~~~~~~~~~~~~~~~^^
     | pyo3_runtime.PanicException: there is no reactor running, must be called from the context of a Tokio 1.x runtime
     +------------------------------------
- Container kafka Stopping 
- Container opensearch Stopping 
- Container opensearch Stopped 
- Container opensearch Removing 
- Container opensearch Removed 
- Container kafka Stopped 
- Container kafka Removing 
- Container kafka Removed 
- Network compose_kafka Removing 
- Network compose_opensearch Removing 
- Network compose_kafka Removed 
- Network compose_opensearch Removed 
- Network compose_opensearch Creating 
- Network compose_opensearch Created 
- Network compose_kafka Creating 
- Network compose_kafka Created 
- Volume compose_opensearch-data Creating 
- Volume compose_opensearch-data Created 
- Container kafka Creating 
- Container opensearch Creating 
- Container kafka Created 
- Container opensearch Created 
- Container opensearch Starting 
- Container kafka Starting 
- Container kafka Started 
- Container opensearch Started 
+ Container kafka Stopping
+ Container opensearch Stopping
+ Container opensearch Stopped
+ Container opensearch Removing
+ Container opensearch Removed
+ Container kafka Stopped
+ Container kafka Removing
+ Container kafka Removed
+ Network compose_kafka Removing
+ Network compose_opensearch Removing
+ Network compose_kafka Removed
+ Network compose_opensearch Removed
+ Network compose_opensearch Creating
+ Network compose_opensearch Created
+ Network compose_kafka Creating
+ Network compose_kafka Created
+ Volume compose_opensearch-data Creating
+ Volume compose_opensearch-data Created
+ Container kafka Creating
+ Container opensearch Creating
+ Container kafka Created
+ Container opensearch Created
+ Container opensearch Starting
+ Container kafka Starting
+ Container kafka Started
+ Container opensearch Started
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 
@@ -274,32 +274,32 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     |     ~~~~~~~~~~~~~~~~~~~~~~^^
     | pyo3_runtime.PanicException: there is no reactor running, must be called from the context of a Tokio 1.x runtime
     +------------------------------------
- Container opensearch Stopping 
- Container kafka Stopping 
- Container opensearch Stopped 
- Container opensearch Removing 
- Container opensearch Removed 
- Container kafka Stopped 
- Container kafka Removing 
- Container kafka Removed 
- Network compose_kafka Removing 
- Network compose_opensearch Removing 
- Network compose_opensearch Removed 
- Network compose_kafka Removed 
- Network compose_kafka Creating 
- Network compose_kafka Created 
- Network compose_opensearch Creating 
- Network compose_opensearch Created 
- Volume compose_opensearch-data Creating 
- Volume compose_opensearch-data Created 
- Container kafka Creating 
- Container opensearch Creating 
- Container kafka Created 
- Container opensearch Created 
- Container kafka Starting 
- Container opensearch Starting 
- Container kafka Started 
- Container opensearch Started 
+ Container opensearch Stopping
+ Container kafka Stopping
+ Container opensearch Stopped
+ Container opensearch Removing
+ Container opensearch Removed
+ Container kafka Stopped
+ Container kafka Removing
+ Container kafka Removed
+ Network compose_kafka Removing
+ Network compose_opensearch Removing
+ Network compose_opensearch Removed
+ Network compose_kafka Removed
+ Network compose_kafka Creating
+ Network compose_kafka Created
+ Network compose_opensearch Creating
+ Network compose_opensearch Created
+ Volume compose_opensearch-data Creating
+ Volume compose_opensearch-data Created
+ Container kafka Creating
+ Container opensearch Creating
+ Container kafka Created
+ Container opensearch Created
+ Container kafka Starting
+ Container opensearch Starting
+ Container kafka Started
+ Container opensearch Started
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 
@@ -354,15 +354,15 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     |     ~~~~~~~~~~~~~~~~~~~~~~^^
     | pyo3_runtime.PanicException: there is no reactor running, must be called from the context of a Tokio 1.x runtime
     +------------------------------------
- Container opensearch Stopping 
- Container kafka Stopping 
- Container opensearch Stopped 
- Container opensearch Removing 
- Container opensearch Removed 
- Container kafka Stopped 
- Container kafka Removing 
- Container kafka Removed 
- Network compose_opensearch Removing 
- Network compose_kafka Removing 
- Network compose_kafka Removed 
- Network compose_opensearch Removed 
+ Container opensearch Stopping
+ Container kafka Stopping
+ Container opensearch Stopped
+ Container opensearch Removing
+ Container opensearch Removed
+ Container kafka Stopped
+ Container kafka Removing
+ Container kafka Removed
+ Network compose_opensearch Removing
+ Network compose_kafka Removing
+ Network compose_kafka Removed
+ Network compose_opensearch Removed

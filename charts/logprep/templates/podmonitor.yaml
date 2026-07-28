@@ -17,4 +17,3 @@ spec:
     - targetPort: {{ .Values.exporter.port }}
       interval: {{ .Values.exporter.scrape_interval}}
 {{ end }}
-

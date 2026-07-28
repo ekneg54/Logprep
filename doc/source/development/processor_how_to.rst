@@ -41,7 +41,7 @@ This :py:class:`Config` class has to inherit from :py:class:`Processor.Config` a
     ------------
 
     Write your processor description here. It will be rendered in the processor documentation.
-    
+
     Example
     ^^^^^^^
     ..  code-block:: yaml
@@ -91,12 +91,12 @@ Those methods could be implemented to create additional data structures and to r
 process
 ^^^^^^^
 
-This method is implemented in the :py:class:`~logprep.abc.processor.Processor` and is called for every log message. 
+This method is implemented in the :py:class:`~logprep.abc.processor.Processor` and is called for every log message.
 To process the event it invokes the processors `apply_rules` method.
 If you want to do something to the event after all rules have been applied, then you could overwrite this method and implement your code after calling the `super().process(event)`.
 The log message is being passed as a dictionary and modified 'in place', meaning that modifications are being performed directly on the input event.
 
-.. code-block:: python 
+.. code-block:: python
    :linenos:
 
     def process(self, event: dict):
@@ -158,7 +158,7 @@ the general implementation of a new processor seen in :ref:`implementing_a_new_p
                 )
             )
             """Short description of this metric"""
-    
+
 
         __slots__ = ["processor_attribute"]
 
@@ -197,8 +197,8 @@ The exporter will automatically recognize it as a new metric and will expose it 
 Tests
 -----
 
-While developing the new processor you have to create a test class under 
+While developing the new processor you have to create a test class under
 `tests.unit.processor.yourprocessor_package.processor`. Your test class has to inherit from
 `BaseProcessorTestCase`. It will help you to implement the necessary methods the right way. All
-tests should pass successfully. Appropriate tests for the processor specific functions have to 
+tests should pass successfully. Appropriate tests for the processor specific functions have to
 be implemented independently.

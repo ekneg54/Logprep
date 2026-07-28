@@ -21,6 +21,11 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -29,6 +34,7 @@
       pyproject-nix,
       uv2nix,
       pyproject-build-systems,
+      rust-overlay,
       ...
     }:
     let
@@ -48,7 +54,11 @@
       pythonSets = forAllSystems (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+          rustToolchain = pkgs.rust-bin.stable.latest.default;
           pythons = pyproject-nix.lib.util.filterPythonInterpreters {
             inherit (workspace) requires-python;
             inherit (pkgs) pythonInterpreters;
@@ -62,6 +72,24 @@
                 lib.composeManyExtensions [
                   pyproject-build-systems.overlays.wheel
                   overlay
+                  (final: prev: {
+                    logprep = let
+                      cargoDeps = pkgs.rustPlatform.importCargoLock {
+                        lockFile = ./Cargo.lock;
+                      };
+                    in prev.logprep.overrideAttrs (old: {
+                      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                        rustToolchain
+                        pkgs.rustPlatform.cargoSetupHook
+                      ];
+                      inherit cargoDeps;
+                      cargoRoot = "crates/logprep-core";
+                      MATURIN_NO_INSTALL_RUST = "1";
+                      prePatch = (old.prePatch or "") + ''
+                        cp Cargo.lock crates/logprep-core/Cargo.lock
+                      '';
+                    });
+                  })
                 ]
               );
 
@@ -78,7 +106,11 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+          rustToolchain = pkgs.rust-bin.stable.latest.default;
           sets = pythonSets.${system};
 
           mkShellFor =
@@ -95,6 +127,8 @@
                 pkgs.pandoc
                 pkgs.basedpyright
                 pkgs.pre-commit
+                rustToolchain
+                pkgs.maturin
               ];
 
               env = {
@@ -127,7 +161,10 @@
       packages = forAllSystems (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
           sets = pythonSets.${system};
 
           mkEnv = pyVer: pythonSet: pythonSet.mkVirtualEnv "logprep-${pyVer}" workspace.deps.default;
