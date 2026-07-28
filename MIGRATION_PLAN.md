@@ -1191,9 +1191,9 @@ docker run --rm logprep:py312 python -c "from logprep._rust import get_dotted_fi
 
 ## Phase 2: Filter-Engine (FilterExpression AST + Lucene-Parser)
 
-**Ziel**: Die gesamte Filter-Expression AST (14 Klassen) plus den Lucene-Query-Parser komplett in Rust implementieren. Python-Code wird auf Import-Wrapper reduziert. Die externe Python-Abhängigkeit `luqum` wird durch einen nativen Rust-Parser ersetzt.
+**Ziel**: Die gesamte Filter-Expression AST (14 Klassen) plus den Lucene-Query-Parser komplett in Rust implementieren. Python-Code wird auf Import-Wrapper reduziert. Die externe Python-Abhängigkeit `luqum` wird durch einen nativen Rust-Parser ersetzt. Es werden im Rust Anteil keine Python Objekte oder pyo3 Klassen genutz. py03 dient nur zur übersetzung der API nach Python.
 
-**Begründung**: Der Filter-Expression-Matching-Code ist der Hot Path für jedes Rule-Matching im System — er wird für jede Nachricht und jedes Rule aufgerufen. Aktuell nutzt er Python's `re`-Modul für Wildcard/Regex-Matching. Ein Rust-Implementierung eliminiert den Python-Overhead komplett. Der `luqum`-Parser (externes Python-Paket) wird durch einen nativen Rust-Parser ersetzt, um die Build-Abhängigkeit zu eliminieren.
+**Begründung**: Der Filter-Expression-Matching-Code ist der Hot Path für jedes Rule-Matching im System — er wird für jede Nachricht und jedes Rule aufgerufen. Aktuell nutzt er Python's `re`-Modul für Wildcard/Regex-Matching. Ein Rust-Implementierung eliminiert den Python-Overhead komplett. Der `luqum`-Parser (externes Python-Paket) wird durch einen nativen Rust-Parser ersetzt, um die Build-Abhängigkeit zu eliminieren. Die Rust Klassen sollen zukünftig direkt benutzt werden, daher müssen sie ohne py03 funktionieren. Zwischenzeitlich wird eine dünne Schicht benötigt, die Rustklassen mit Python objekten koppelt.
 
 **Abhängigkeiten**: Phase 1 (Dotted-Field Helper in Rust)
 
@@ -1234,11 +1234,35 @@ docker run --rm logprep:py312 python -c "from logprep._rust import get_dotted_fi
 
 ---
 
-### Schritt 2a: `regex` Crate + Rust-Expressions (Match-Logik)
+### Schritt 2a: Pure Rust Core + PyO3-Adapter (Expression-Typen)
 
-**Ziel**: Alle 14 FilterExpression-Klassen + 2 Exception-Klassen in Rust implementieren. `luqum` bleibt vorerst in Python — wird in Schritt 2b ersetzt.
+**Ziel**: Die gesamte Filter-Expression AST (15 Klassen) als **pure Rust Enum** implementieren — Match-Logik arbeitet auf `serde_json::Value`, keine Python-Objekte im Kern. PyO3 dient nur als dünne API-Übersetzungsschicht.
 
 **Abhängigkeiten**: Phase 1 abgeschlossen
+
+**Architektur-Prinzip**:
+
+```
+┌─────────────────────────────────────────────────┐
+│  Pure Rust Core (kein PyO3)                      │
+│  FilterExpressionInner: Enum mit 15 Varianten    │
+│  matches(&serde_json::Value) → bool              │
+│  does_match(&serde_json::Value) → Result<bool>   │
+│  to_repr() → String                              │
+│  Hilfsfunktionen: get_json_value, path_exists...  │
+└─────────────────────────────────────────────────┘
+         ↑ delegiert
+┌─────────────────────────────────────────────────┐
+│  PyO3 Adapter (dünne Schicht)                    │
+│  PyFilterExpression { inner: FilterExpressionInner }│
+│  FilterExpression.string(...) → PyFilterExpression │
+│  FilterExpression.not_(...)  → PyFilterExpression  │
+│  FilterExpression.and_(...)  → PyFilterExpression  │
+│  matches(document: &PyAny) → bool (dict→json)    │
+└─────────────────────────────────────────────────┘
+```
+
+**Vorteil**: Die Rust-Klassen sind unabhängig von PyO3 nutzbar (z.B. für direkte Rust-Tests, zukünftige Rust-nur Pipelines). PyO3 wird ausschließlich für die Python-API-Übersetzung genutzt.
 
 #### Workspace-Änderung (`Cargo.toml`):
 
@@ -1267,9 +1291,9 @@ crates/logprep-core/src/
 ├── lib.rs              # pymodule: filter + field
 ├── field.rs            # (bestehend, Phase 1)
 └── filter/
-    ├── mod.rs          # pymodule definition
-    ├── expression.rs   # FilterExpression Enum + Match-Logik
-    └── range.rs        # Range-Boundary-Typen
+    ├── mod.rs           # mod-Deklarationen + pymodule
+    ├── expression.rs    # FilterExpressionInner (pure Rust) + PyO3 Adapter + Factory-Funktionen
+    └── range.rs         # Range-Boundary-Typen + Parsing
 ```
 
 #### `crates/logprep-core/src/filter/mod.rs`
@@ -1280,41 +1304,31 @@ pub mod range;
 
 use pyo3::prelude::*;
 
+/// PyO3-Submodul — registriert den Single-Python-Class + Factory-Funktionen.
 #[pymodule]
 pub fn filter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<expression::PyFilterExpression>()?;
-    m.add_class::<expression::PyAlways>()?;
-    m.add_class::<expression::PyNot>()?;
-    m.add_class::<expression::PyAnd>()?;
-    m.add_class::<expression::PyOr>()?;
-    m.add_class::<expression::PyStringFilterExpression>()?;
-    m.add_class::<expression::PyWildcardStringFilterExpression>()?;
-    m.add_class::<expression::PySigmaFilterExpression>()?;
-    m.add_class::<expression::PyIntegerFilterExpression>()?;
-    m.add_class::<expression::PyFloatFilterExpression>()?;
-    m.add_class::<expression::PyIntegerRangeFilterExpression>()?;
-    m.add_class::<expression::PyFloatRangeFilterExpression>()?;
-    m.add_class::<expression::PyStringRangeFilterExpression>()?;
-    m.add_class::<expression::PyRegExFilterExpression>()?;
-    m.add_class::<expression::PyExists>()?;
-    m.add_class::<expression::PyNull>()?;
+    m.add_function(wrap_pyfunction!(expression::filter_expression, m)?)?;
+    m.add_function(wrap_pyfunction!(expression::filter_expression_not, m)?)?;
+    m.add_function(wrap_pyfunction!(expression::filter_expression_and, m)?)?;
+    m.add_function(wrap_pyfunction!(expression::filter_expression_or, m)?)?;
     m.add_class::<expression::FilterExpressionError>()?;
     m.add_class::<expression::KeyDoesNotExistError>()?;
     Ok(())
 }
 ```
 
-#### `crates/logprep-core/src/filter/expression.rs`
+#### `crates/logprep-core/src/filter/expression.rs` — Pure Rust Core
 
-Das Herzstück — alle Expression-Typen als Rust-Enum mit Match-Logik:
+Das Herzstück: Alle Expression-Typen als Rust-Enum. **Keine PyO3-Abhängigkeiten** in den Match-Funktionen. Die Enum arbeitet mit `serde_json::Value` statt Python-Dicts.
 
 ```rust
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use regex::Regex;
-use std::collections::HashMap;
+use serde_json::{Map, Value};
 
-use super::range::{RangeBoundary, parse_int, parse_float};
+use super::range::{parse_int_range, parse_float_range, parse_string_range};
 
 // ─── Exceptions ───
 
@@ -1329,647 +1343,18 @@ pyo3::create_exception!(
     FilterExpressionError
 );
 
-// ─── Hilfsfunktionen ───
-
-/// Traversiert ein verschachteltes Dict entlang eines Key-Pfads.
-fn get_value<'py>(
-    py: Python<'py>,
-    key: &[String],
-    document: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    if key.is_empty() {
-        return Err(KeyDoesNotExistError::new_err("empty key"));
-    }
-    let mut current = document.clone();
-    for segment in key {
-        let dict: Bound<'py, PyDict> = current.downcast().map_err(|_| {
-            KeyDoesNotExistError::new_err(format!(
-                "key '{}' is not a dict",
-                segment
-            ))
-        })?;
-        current = dict.get_item(segment)?.ok_or_else(|| {
-            KeyDoesNotExistError::new_err(format!(
-                "key '{}' does not exist",
-                segment
-            ))
-        })?;
-    }
-    Ok(current)
-}
-
-/// Prüft ob ein Pfad in einem Dict existiert (ohne Wert zurückzugeben).
-fn path_exists(
-    key: &[String],
-    document: &Bound<'_, PyAny>,
-) -> bool {
-    if key.is_empty() {
-        return false;
-    }
-    let mut current = document.clone();
-    for segment in key {
-        let Ok(dict) = current.downcast::<PyDict>() else {
-            return false;
-        };
-        let Ok(Some(child)) = dict.get_item(segment) else {
-            return false;
-        };
-        current = child;
-    }
-    true
-}
-
-/// Gibt None als Python-None zurück, alles andere als gebundenes Objekt.
-fn is_none_py(obj: &Bound<'_, PyAny>) -> bool {
-    obj.is_none()
-}
-
-// ─── Python-Klassen ───
-
-/// Basis-Klasse — wird von allen konkreten Expression-Klassen geerbt.
-#[pyclass(subclass)]
-pub struct PyFilterExpression;
-
-#[pymethods]
-impl PyFilterExpression {
-    /// Safe-Matching: Gibt False bei fehlenden Keys zurück.
-    fn matches(&self, py: Python, document: &Bound<'_, PyAny>) -> bool {
-        if !document.is_instance::<PyDict>().unwrap_or(false) {
-            return false;
-        }
-        match self.does_match(py, document) {
-            Ok(result) => result,
-            Err(e) => {
-                if e.is_instance_of::<KeyDoesNotExistError>(py) {
-                    false
-                } else {
-                    panic!("unexpected error in matches(): {:?}", e);
-                }
-            }
-        }
-    }
-
-    /// Muss von Unterklassen überschrieben werden.
-    fn does_match(
-        &self,
-        _py: Python,
-        _document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        unimplemented!("does_match must be overridden")
-    }
-}
-
-// ─── Always ───
-
-#[pyclass(extends=PyFilterExpression)]
-pub struct PyAlways {
-    #[pyo3(get)]
-    value: bool,
-}
-
-#[pymethods]
-impl PyAlways {
-    #[new]
-    fn new(value: bool) -> Self {
-        Self { value }
-    }
-
-    fn __repr__(&self) -> String {
-        if self.value {
-            "*".to_string()
-        } else {
-            "".to_string()
-        }
-    }
-
-    fn does_match(&self, _py: Python, _document: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(self.value)
-    }
-}
-
-// ─── Not ───
-
-#[pyclass(extends=PyFilterExpression)]
-pub struct PyNot {
-    child: Py<PyFilterExpression>,
-}
-
-#[pymethods]
-impl PyNot {
-    #[new]
-    #[pyo3(signature = (expression,))]
-    fn new(expression: &Bound<'_, PyFilterExpression>) -> PyResult<Self> {
-        Ok(Self {
-            child: expression.clone().unbind(),
-        })
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        let child_repr = self.child.bind(py).call_method0("__repr__").unwrap();
-        format!("NOT ({})", child_repr)
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let child = self.child.bind(py);
-        // Not nutzt `matches()` (safe) statt `does_match()` — entspricht Python-Verhalten
-        let result: bool = child.call_method1("matches", (document,))?;
-        Ok(!result)
-    }
-}
-
-// ─── And ───
-
-#[pyclass(extends=PyFilterExpression)]
-pub struct PyAnd {
-    children: Vec<Py<PyFilterExpression>>,
-}
-
-#[pymethods]
-impl PyAnd {
-    #[new]
-    #[pyo3(signature = (*children))]
-    fn new(children: Vec<&Bound<'_, PyFilterExpression>>) -> PyResult<Self> {
-        Ok(Self {
-            children: children.into_iter().map(|c| c.clone().unbind()).collect(),
-        })
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        let parts: Vec<String> = self
-            .children
-            .iter()
-            .map(|c| {
-                c.bind(py)
-                    .call_method0("__repr__")
-                    .unwrap()
-                    .to_string()
-            })
-            .collect();
-        format!("({})", parts.join(" AND "))
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        for child in &self.children {
-            let result: bool = child.bind(py).call_method1("matches", (document,))?;
-            if !result {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-}
-
-// ─── Or ───
-
-#[pyclass(extends=PyFilterExpression)]
-pub struct PyOr {
-    children: Vec<Py<PyFilterExpression>>,
-}
-
-#[pymethods]
-impl PyOr {
-    #[new]
-    #[pyo3(signature = (*children))]
-    fn new(children: Vec<&Bound<'_, PyFilterExpression>>) -> PyResult<Self> {
-        Ok(Self {
-            children: children.into_iter().map(|c| c.clone().unbind()).collect(),
-        })
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        let parts: Vec<String> = self
-            .children
-            .iter()
-            .map(|c| {
-                c.bind(py)
-                    .call_method0("__repr__")
-                    .unwrap()
-                    .to_string()
-            })
-            .collect();
-        format!("({})", parts.join(" OR "))
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        for child in &self.children {
-            let result: bool = child.bind(py).call_method1("matches", (document,))?;
-            if result {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-}
-
-// ─── KeyBased (Zwischenklasse) ───
-
-#[pyclass(subclass, extends=PyFilterExpression)]
-pub struct PyKeyBasedFilterExpression {
-    #[pyo3(get)]
-    key: Vec<String>,
-    key_as_dotted_string: String,
-}
-
-#[pymethods]
-impl PyKeyBasedFilterExpression {
-    #[new]
-    fn new(key: Vec<String>) -> Self {
-        let dotted = key
-            .iter()
-            .map(|k| k.replace('.', "\\."))
-            .collect::<Vec<_>>()
-            .join(".");
-        Self {
-            key,
-            key_as_dotted_string: dotted,
-        }
-    }
-
-    #[getter]
-    fn key_as_dotted_string(&self) -> String {
-        self.key_as_dotted_string.clone()
-    }
-}
-
-// ─── KeyValueBased (Zwischenklasse) ───
-
-#[pyclass(subclass, extends=PyKeyBasedFilterExpression)]
-pub struct PyKeyValueBasedFilterExpression {
-    #[pyo3(get)]
-    expected_value: String,
-}
-
-#[pymethods]
-impl PyKeyValueBasedFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> Self {
-        Self { expected_value }
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        // key_as_dotted_string vom Elternteil holen
-        let parent: &PyKeyBasedFilterExpression = self.into();
-        format!("{}:{}", parent.key_as_dotted_string, self.expected_value)
-    }
-}
-
-// ─── StringFilterExpression ───
-
-#[pyclass(extends=PyKeyValueBasedFilterExpression)]
-pub struct PyStringFilterExpression;
-
-#[pymethods]
-impl PyStringFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> Self {
-        Self
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyValueBasedFilterExpression = self.into();
-        let key = &self_get_key(parent);
-        let value = get_value(py, key, document)?;
-
-        if let Ok(list) = value.downcast::<PyList>() {
-            for item in list.iter() {
-                let s: String = item.extract()?;
-                if s == parent.expected_value {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
-        }
-
-        let value_str: String = value.extract().unwrap_or_default();
-        Ok(value_str == parent.expected_value)
-    }
-}
-
-// ─── WildcardStringFilterExpression ───
-
-#[pyclass(extends=PyKeyValueBasedFilterExpression)]
-pub struct PyWildcardStringFilterExpression {
-    compiled_regex: Regex,
-}
-
-#[pymethods]
-impl PyWildcardStringFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> PyResult<Self> {
-        let regex_str = Self::build_regex(&expected_value)?;
-        let compiled_regex = Regex::new(&regex_str).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
-        })?;
-        Ok(Self { compiled_regex })
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyValueBasedFilterExpression = self.into();
-        let key = &parent.key;
-        let value = get_value(py, key, document)?;
-
-        if let Ok(list) = value.downcast::<PyList>() {
-            for item in list.iter() {
-                let s: String = item.extract()?;
-                if self.compiled_regex.is_match(&s) {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
-        }
-
-        let value_str: String = value.extract().unwrap_or_default();
-        Ok(self.compiled_regex.is_match(&value_str))
-    }
-}
-
-impl PyWildcardStringFilterExpression {
-    fn build_regex(expected: &str) -> PyResult<String> {
-        // re.escape equivalent + wildcard substitution
-        let escaped = regex::escape(expected);
-        // Escape \* und \? zu literalen backslash-stars/ques
-        // Dann * → .* und ? → .?
-        let mut result = String::new();
-        let chars: Vec<char> = escaped.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i] == '\\' && i + 1 < chars.len() {
-                if chars[i + 1] == '*' {
-                    result.push('\\');
-                    result.push('*');
-                    i += 2;
-                    continue;
-                }
-                if chars[i + 1] == '?' {
-                    result.push('\\');
-                    result.push('?');
-                    i += 2;
-                    continue;
-                }
-            }
-            if chars[i] == '*' {
-                result.push_str(".*");
-            } else if chars[i] == '?' {
-                result.push_str(".?");
-            } else {
-                result.push(chars[i]);
-            }
-            i += 1;
-        }
-        Ok(format!("^{}$", result))
-    }
-}
-
-// ─── SigmaFilterExpression (case-insensitive) ───
-
-#[pyclass(extends=PyWildcardStringFilterExpression)]
-pub struct PySigmaFilterExpression;
-
-#[pymethods]
-impl PySigmaFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> PyResult<Self> {
-        // Selbe Logik wie Wildcard, aber case-insensitive regex
-        let regex_str = PyWildcardStringFilterExpression::build_regex(&expected_value)?;
-        let compiled = Regex::new(&format!("(?i){}", regex_str)).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
-        })?;
-        // In parent setzen
-        Ok(Self)
-    }
-}
-
-// ─── IntegerFilterExpression ───
-
-#[pyclass(extends=PyKeyValueBasedFilterExpression)]
-pub struct PyIntegerFilterExpression {
-    expected_int: i64,
-}
-
-#[pymethods]
-impl PyIntegerFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> PyResult<Self> {
-        let expected_int: i64 = expected_value.parse().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid integer: {}",
-                expected_value
-            ))
-        })?;
-        Ok(Self { expected_int })
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyValueBasedFilterExpression = self.into();
-        let value = get_value(py, &parent.key, document)?;
-        let int_val: i64 = value.extract()?;
-        Ok(int_val == self.expected_int)
-    }
-}
-
-// ─── FloatFilterExpression ───
-
-#[pyclass(extends=PyKeyValueBasedFilterExpression)]
-pub struct PyFloatFilterExpression {
-    expected_float: f64,
-}
-
-#[pymethods]
-impl PyFloatFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, expected_value: String) -> PyResult<Self> {
-        let expected_float: f64 = expected_value.parse().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid float: {}",
-                expected_value
-            ))
-        })?;
-        Ok(Self { expected_float })
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyValueBasedFilterExpression = self.into();
-        let value = get_value(py, &parent.key, document)?;
-        let float_val: f64 = value.extract()?;
-        Ok((float_val - self.expected_float).abs() < f64::EPSILON)
-    }
-}
-
-// ─── RegExFilterExpression ───
-
-#[pyclass(extends=PyKeyValueBasedFilterExpression)]
-pub struct PyRegExFilterExpression {
-    compiled_regex: Regex,
-}
-
-#[pymethods]
-impl PyRegExFilterExpression {
-    #[new]
-    fn new(key: Vec<String>, regex: String) -> PyResult<Self> {
-        let normalized = Self::normalize_regex(&regex);
-        let compiled_regex = Regex::new(&normalized).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
-        })?;
-        let display = format!("/{}/", normalized.trim_start_matches('^').trim_end_matches('$'));
-        Ok(Self { compiled_regex })
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyValueBasedFilterExpression = self.into();
-        let value = get_value(py, &parent.key, document)?;
-
-        if let Ok(list) = value.downcast::<PyList>() {
-            for item in list.iter() {
-                let s: String = item.extract()?;
-                if self.compiled_regex.is_match(&s) {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
-        }
-
-        let value_str: String = value.extract().unwrap_or_default();
-        Ok(self.compiled_regex.is_match(&value_str))
-    }
-}
-
-impl PyRegExFilterExpression {
-    fn normalize_regex(regex: &str) -> String {
-        // Flags extrahieren (z.B. (?i))
-        let (flags, pattern) = if regex.starts_with("(?") {
-            if let Some(end) = regex.find(')') {
-                (&regex[..=end], &regex[end + 1..])
-            } else {
-                ("", regex)
-            }
-        } else {
-            ("", regex)
-        };
-
-        // ^ am Anfang prüfen
-        let has_caret = pattern.starts_with('^');
-        let has_dollar = pattern.ends_with('$');
-
-        let clean = pattern
-            .trim_start_matches('^')
-            .trim_end_matches('$');
-
-        let mut result = String::from(flags);
-        if !has_caret {
-            result.push('^');
-        }
-        result.push_str(clean);
-        if !has_dollar {
-            result.push('$');
-        }
-        result
-    }
-}
-
-// ─── Exists ───
-
-#[pyclass(extends=PyKeyBasedFilterExpression)]
-pub struct PyExists;
-
-#[pymethods]
-impl PyExists {
-    #[new]
-    fn new(key: Vec<String>) -> Self {
-        Self
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        let parent: &PyKeyBasedFilterExpression = self.into();
-        format!("{}: *", parent.key_as_dotted_string)
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyBasedFilterExpression = self.into();
-        Ok(path_exists(&parent.key, document))
-    }
-}
-
-// ─── Null ───
-
-#[pyclass(extends=PyKeyBasedFilterExpression)]
-pub struct PyNull;
-
-#[pymethods]
-impl PyNull {
-    #[new]
-    fn new(key: Vec<String>) -> Self {
-        Self
-    }
-
-    fn __repr__(&self, py: Python) -> String {
-        let parent: &PyKeyBasedFilterExpression = self.into();
-        format!("{}:null", parent.key_as_dotted_string)
-    }
-
-    fn does_match(
-        &self,
-        py: Python,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<bool> {
-        let parent: &PyKeyBasedFilterExpression = self.into();
-        let value = get_value(py, &parent.key, document)?;
-        Ok(value.is_none())
-    }
-}
-```
-
-> **Hinweis**: Die obige Implementierung ist ein Richtungs-Beispiel. PyO3-Vererbung (Subclassing) erfordert sorgfältiges Arbeiten mit `#[pyclass(extends=...)]` und `self.into()`. Die finale Implementierung muss ggf. auf Enums oder Kapselung (Wrapper-Objekt mit inner-Referenz) ausweichen, falls PyO3-Vererbung zu eingeschränkt ist.
-
-**Alternative Architektur** (falls PyO3-Vererbung zu limitiert):
-
-```rust
-/// Enum-basiert — einfacher, keine Vererbung nötig
-#[pyclass]
-pub struct FilterExpression {
-    inner: FilterExpressionInner,
-}
-
-enum FilterExpressionInner {
+// ═══════════════════════════════════════════════════════════
+// Pure Rust Core — Kein PyO3, nur serde_json
+// ═══════════════════════════════════════════════════════════
+
+/// Alle 15 Expression-Varianten als Rust-Enum.
+/// Match-Logik arbeitet auf `serde_json::Value` (keine Python-Objekte).
+#[derive(Debug, Clone)]
+pub enum FilterExpressionInner {
     Always { value: bool },
-    Not { child: Py<FilterExpression> },
-    And { children: Vec<Py<FilterExpression>> },
-    Or { children: Vec<Py<FilterExpression>> },
+    Not { child: Box<FilterExpressionInner> },
+    And { children: Vec<FilterExpressionInner> },
+    Or { children: Vec<FilterExpressionInner> },
     String { key: Vec<String>, expected: String },
     Wildcard { key: Vec<String>, expected: String, regex: Regex },
     Sigma { key: Vec<String>, expected: String, regex: Regex },
@@ -1982,210 +1367,873 @@ enum FilterExpressionInner {
     Exists { key: Vec<String> },
     Null { key: Vec<String> },
 }
-```
 
-Diese Variante ist vorzuziehen, da sie PyO3-Vererbungs-Edge-Cases vermeidet und die Python-API trotzdem identisch bleibt (`FilterExpression.matches(document)`, `FilterExpression.does_match(document)` etc.).
+impl FilterExpressionInner {
+    /// Safe-Matching: Gibt False bei fehlenden Keys/Typfehlern zurück.
+    pub fn matches(&self, document: &Value) -> bool {
+        match self.does_match(document) {
+            Ok(result) => result,
+            Err(MatchError::KeyNotFound) => false,
+            Err(MatchError::TypeMismatch) => false,
+        }
+    }
 
-#### `crates/logprep-core/src/filter/range.rs`
+    /// Fallibles Matching — wirft MatchError bei fehlenden Keys.
+    pub fn does_match(&self, document: &Value) -> Result<bool, MatchError> {
+        match self {
+            Self::Always { value } => Ok(*value),
 
-```rust
-pub enum RangeBoundary {
-    Int(i64),
-    Float(f64),
-    Str(String),
-}
+            Self::Not { child } => {
+                // Not nutzt matches() (safe) — entspricht Python-Verhalten
+                Ok(!child.matches(document))
+            }
 
-pub fn parse_int(s: &str) -> Result<i64, ()> {
-    s.parse::<i64>().map_err(|_| ())
-}
+            Self::And { children } => {
+                for child in children {
+                    if !child.matches(document) {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
 
-pub fn parse_float(s: &str) -> Result<f64, ()> {
-    let val = s.parse::<f64>().map_err(|_| ())?;
-    if val.is_finite() {
-        Ok(val)
-    } else {
-        Err(())
+            Self::Or { children } => {
+                for child in children {
+                    if child.matches(document) {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+
+            Self::String { key, expected } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::String(s) => Ok(s == expected),
+                    Value::Array(arr) => {
+                        Ok(arr.iter().any(|v| v.as_str() == Some(expected.as_str())))
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::Wildcard { key, regex, .. } | Self::Sigma { key, regex, .. } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::String(s) => Ok(regex.is_match(s)),
+                    Value::Array(arr) => {
+                        Ok(arr.iter().any(|v| {
+                            v.as_str().map_or(false, |s| regex.is_match(s))
+                        }))
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::Integer { key, expected } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            Ok(i == *expected)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::Float { key, expected } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::Number(n) => {
+                        if let Some(f) = n.as_f64() {
+                            Ok((f - *expected).abs() < f64::EPSILON)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::IntegerRange { key, lower, upper, incl_low, incl_high } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            let lo_ok = if *incl_low { i >= *lower } else { i > *lower };
+                            let hi_ok = if *incl_high { i <= *upper } else { i < *upper };
+                            Ok(lo_ok && hi_ok)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::FloatRange { key, lower, upper, incl_low, incl_high } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::Number(n) => {
+                        if let Some(f) = n.as_f64() {
+                            let lo_ok = if *incl_low { f >= *lower } else { f > *lower };
+                            let hi_ok = if *incl_high { f <= *upper } else { f < *upper };
+                            Ok(lo_ok && hi_ok)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::StringRange { key, lower, upper, incl_low, incl_high } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::String(s) => {
+                        let lo_ok = if *incl_low { s.as_str() >= lower.as_str() } else { s.as_str() > lower.as_str() };
+                        let hi_ok = if *incl_high { s.as_str() <= upper.as_str() } else { s.as_str() < upper.as_str() };
+                        Ok(lo_ok && hi_ok)
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::Regex { key, pattern } => {
+                let value = get_json_value(key, document)?;
+                match &value {
+                    Value::String(s) => Ok(pattern.is_match(s)),
+                    Value::Array(arr) => {
+                        Ok(arr.iter().any(|v| {
+                            v.as_str().map_or(false, |s| pattern.is_match(s))
+                        }))
+                    }
+                    _ => Ok(false),
+                }
+            }
+
+            Self::Exists { key } => Ok(path_exists(key, document)),
+
+            Self::Null { key } => {
+                let value = get_json_value(key, document)?;
+                Ok(value.is_null())
+            }
+        }
+    }
+
+    /// Python-kompatibles __repr__ (pure Rust, kein Python-Aufruf).
+    pub fn to_repr(&self) -> String {
+        match self {
+            Self::Always { value } => {
+                if *value { "*".to_string() } else { "".to_string() }
+            }
+            Self::Not { child } => format!("NOT ({})", child.to_repr()),
+            Self::And { children } => {
+                let parts: Vec<String> = children.iter().map(|c| c.to_repr()).collect();
+                format!("({})", parts.join(" AND "))
+            }
+            Self::Or { children } => {
+                let parts: Vec<String> = children.iter().map(|c| c.to_repr()).collect();
+                format!("({})", parts.join(" OR "))
+            }
+            Self::String { key, expected } => {
+                format!("{}:{}", dotted_key(key), expected)
+            }
+            Self::Wildcard { key, expected, .. } => {
+                format!("{}:{}", dotted_key(key), expected)
+            }
+            Self::Sigma { key, expected, .. } => {
+                format!("{}:{}", dotted_key(key), expected)
+            }
+            Self::Integer { key, expected } => {
+                format!("{}:{}", dotted_key(key), expected)
+            }
+            Self::Float { key, expected } => {
+                format!("{}:{}", dotted_key(key), expected)
+            }
+            Self::IntegerRange { key, lower, upper, incl_low, incl_high } => {
+                range_repr(key, &lower.to_string(), &upper.to_string(), *incl_low, *incl_high)
+            }
+            Self::FloatRange { key, lower, upper, incl_low, incl_high } => {
+                range_repr(key, &lower.to_string(), &upper.to_string(), *incl_low, *incl_high)
+            }
+            Self::StringRange { key, lower, upper, incl_low, incl_high } => {
+                range_repr(key, lower, upper, *incl_low, *incl_high)
+            }
+            Self::Regex { key, pattern } => {
+                let display = pattern.as_str().trim_start_matches('^').trim_end_matches('$');
+                format!("{}:/ {}/ ", dotted_key(key), display)
+            }
+            Self::Exists { key } => format!("{}: *", dotted_key(key)),
+            Self::Null { key } => format!("{}:null", dotted_key(key)),
+        }
     }
 }
-```
 
-#### PyO3-Modul (`crates/logprep-core/src/lib.rs`):
+// ─── Fehler-Typ (kein Python, pure Rust) ───
 
-```diff
- use pyo3::prelude::*;
+#[derive(Debug)]
+pub enum MatchError {
+    KeyNotFound,
+    TypeMismatch,
+}
 
- pub mod field;
-+pub mod filter;
+// ─── Pure Rust Hilfsfunktionen ───
 
- #[pymodule]
- fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-+    // Filter
-+    m.add_submodule(filter::filter(m)?)?;
-+
-     // Field (Phase 1)
-     m.add_function(wrap_pyfunction!(field::get_dotted_field_list, m)?)?;
-     // ... (bestehende Funktionen)
-     Ok(())
- }
-```
+/// Traversiert ein `serde_json::Value`-Dict entlang eines Key-Pfads.
+fn get_json_value(key: &[String], document: &Value) -> Result<Value, MatchError> {
+    if key.is_empty() {
+        return Err(MatchError::KeyNotFound);
+    }
+    let mut current = document;
+    for segment in key {
+        match current {
+            Value::Object(map) => {
+                current = map.get(segment.as_str()).ok_or(MatchError::KeyNotFound)?;
+            }
+            _ => return Err(MatchError::TypeMismatch),
+        }
+    }
+    Ok(current.clone())
+}
 
-#### Rust-Tests (`crates/logprep-core/src/filter/expression.rs`):
+/// Prüft ob ein Pfad in einem serde_json::Value-Dict existiert.
+fn path_exists(key: &[String], document: &Value) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let mut current = document;
+    for segment in key {
+        match current {
+            Value::Object(map) => {
+                match map.get(segment.as_str()) {
+                    Some(child) => current = child,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
 
-```rust
+/// Escaped Punkte in Key-Komponenten: ["x.y", "z"] → "x\\.y.z"
+fn dotted_key(key: &[String]) -> String {
+    key.iter()
+        .map(|k| k.replace('.', "\\."))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Hilfsfunktion für Range-Repräsentation.
+fn range_repr(key: &[String], lower: &str, upper: &str, incl_low: bool, incl_high: bool) -> String {
+    let lo = if incl_low { "[" } else { "{" }.to_string();
+    let hi = if incl_high { "]" } else { "}" }.to_string();
+    format!("{}:{} {} TO {}{}", dotted_key(key), lo, lower, upper, hi)
+}
+
+// ─── Hilfsfunktionen für Parser (exportiert für lucene.rs) ───
+
+/// Baut ein Regex aus einem Wildcard-Pattern (* → .*, ? → .?).
+pub fn build_wildcard_regex(pattern: &str) -> Result<Regex, String> {
+    let escaped = regex::escape(pattern);
+    let mut result = String::new();
+    let chars: Vec<char> = escaped.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            if chars[i + 1] == '*' {
+                result.push('\\');
+                result.push('*');
+                i += 2;
+                continue;
+            }
+            if chars[i + 1] == '?' {
+                result.push('\\');
+                result.push('?');
+                i += 2;
+                continue;
+            }
+        }
+        if chars[i] == '*' {
+            result.push_str(".*");
+        } else if chars[i] == '?' {
+            result.push_str(".?");
+        } else {
+            result.push(chars[i]);
+        }
+        i += 1;
+    }
+    let full = format!("^{}$", result);
+    Regex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
+}
+
+/// Baut ein case-insensitive Sigma-Regex aus einem Wildcard-Pattern.
+pub fn build_sigma_regex(pattern: &str) -> Result<Regex, String> {
+    let inner = build_wildcard_regex(pattern)?;
+    let full = format!("(?i){}", inner.as_str());
+    Regex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
+}
+
+/// Normalisiert ein Regex: fügt ^/$ Anchors hinzu wenn fehlend.
+pub fn normalize_regex(regex: &str) -> String {
+    let (flags, pattern) = if regex.starts_with("(?") {
+        if let Some(end) = regex.find(')') {
+            (&regex[..=end], &regex[end + 1..])
+        } else {
+            ("", regex)
+        }
+    } else {
+        ("", regex)
+    };
+
+    let has_caret = pattern.starts_with('^');
+    let has_dollar = pattern.ends_with('$');
+    let clean = pattern.trim_start_matches('^').trim_end_matches('$');
+
+    let mut result = String::from(flags);
+    if !has_caret {
+        result.push('^');
+    }
+    result.push_str(clean);
+    if !has_dollar {
+        result.push('$');
+    }
+    result
+}
+
+// ═══════════════════════════════════════════════════════════
+// PyO3 Adapter — Dünne Schicht für Python-API
+// ═══════════════════════════════════════════════════════════
+
+/// Einzelne Python-Klasse die alle Expression-Typen repräsentiert.
+/// Die Python-Identität wird durch `expression_type` und Attribute differenziert.
+#[pyclass]
+#[derive(Clone)]
+pub struct PyFilterExpression {
+    inner: FilterExpressionInner,
+}
+
+#[pymethods]
+impl PyFilterExpression {
+    /// Typ-Name für isinstance-Äquivalent in Python.
+    #[getter]
+    fn expression_type(&self) -> &'static str {
+        match &self.inner {
+            FilterExpressionInner::Always { .. } => "Always",
+            FilterExpressionInner::Not { .. } => "Not",
+            FilterExpressionInner::And { .. } => "And",
+            FilterExpressionInner::Or { .. } => "Or",
+            FilterExpressionInner::String { .. } => "StringFilterExpression",
+            FilterExpressionInner::Wildcard { .. } => "WildcardStringFilterExpression",
+            FilterExpressionInner::Sigma { .. } => "SigmaFilterExpression",
+            FilterExpressionInner::Integer { .. } => "IntegerFilterExpression",
+            FilterExpressionInner::Float { .. } => "FloatFilterExpression",
+            FilterExpressionInner::IntegerRange { .. } => "IntegerRangeFilterExpression",
+            FilterExpressionInner::FloatRange { .. } => "FloatRangeFilterExpression",
+            FilterExpressionInner::StringRange { .. } => "StringRangeFilterExpression",
+            FilterExpressionInner::Regex { .. } => "RegExFilterExpression",
+            FilterExpressionInner::Exists { .. } => "Exists",
+            FilterExpressionInner::Null { .. } => "Null",
+        }
+    }
+
+    /// Safe-Matching: Gibt False bei fehlenden Keys/Typfehlern zurück.
+    fn matches(&self, py: Python, document: &Bound<'_, PyAny>) -> bool {
+        if !document.is_instance::<PyDict>().unwrap_or(false) {
+            return false;
+        }
+        match pydict_to_json(document) {
+            Ok(json_doc) => self.inner.matches(&json_doc),
+            Err(_) => false,
+        }
+    }
+
+    /// Fallibles Matching — wirft KeyDoesNotExistError bei fehlenden Keys.
+    fn does_match(&self, py: Python, document: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let json_doc = pydict_to_json(document)
+            .map_err(|_| KeyDoesNotExistError::new_err("Failed to convert document"))?;
+        self.inner.does_match(&json_doc).map_err(|e| match e {
+            MatchError::KeyNotFound => KeyDoesNotExistError::new_err("key does not exist"),
+            MatchError::TypeMismatch => KeyDoesNotExistError::new_err("type mismatch"),
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        self.inner.to_repr()
+    }
+
+    // ─── Attribute für KeyBased-Typen ───
+
+    /// Key als Vec<String> (nur für KeyBased-Typen verfügbar).
+    #[getter]
+    fn key(&self) -> PyResult<Vec<String>> {
+        key_from_inner(&self.inner)
+    }
+
+    /// Key als escaped Dotted-String (nur für KeyBased-Typen).
+    #[getter]
+    fn key_as_dotted_string(&self) -> PyResult<String> {
+        let key = key_from_inner(&self.inner)?;
+        Ok(dotted_key(&key))
+    }
+
+    /// Expected value (nur für KeyValueBased-Typen).
+    #[getter]
+    fn expected_value(&self) -> PyResult<String> {
+        expected_from_inner(&self.inner)
+    }
+
+    /// Value bei Always (nur für Always).
+    #[getter]
+    fn value(&self) -> PyResult<bool> {
+        match &self.inner {
+            FilterExpressionInner::Always { value } => Ok(*value),
+            _ => Err(pyo3::exceptions::PyAttributeError::new_err("no 'value' attribute")),
+        }
+    }
+
+    /// Children bei And/Or/Not (als Vec<PyFilterExpression>).
+    #[getter]
+    fn children<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyFilterExpression>>> {
+        children_from_inner(&self.inner, py)
+    }
+}
+
+// ─── Python-Dict → serde_json::Value Konverter ───
+
+fn pydict_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if let Ok(dict) = obj.downcast::<PyDict>() {
+        let mut map = Map::new();
+        for (key, value) in dict.iter() {
+            let k: String = key.extract()?;
+            let v = pyany_to_json(&value)?;
+            map.insert(k, v);
+        }
+        Ok(Value::Object(map))
+    } else if let Ok(list) = obj.downcast::<PyList>() {
+        let mut arr = Vec::new();
+        for item in list.iter() {
+            arr.push(pyany_to_json(&item)?);
+        }
+        Ok(Value::Array(arr))
+    } else if obj.is_none() {
+        Ok(Value::Null)
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(Value::String(s))
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(Value::Number(i.into()))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(Value::Number(serde_json::Number::from_f64(f).unwrap_or(0.into())))
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(Value::Bool(b))
+    } else {
+        // Fallback: String-Repräsentation
+        Ok(Value::String(obj.to_string()))
+    }
+}
+
+// ─── Helper: Key/Value aus Inner extrahieren ───
+
+fn key_from_inner(inner: &FilterExpressionInner) -> PyResult<Vec<String>> {
+    match inner {
+        FilterExpressionInner::String { key, .. }
+        | FilterExpressionInner::Wildcard { key, .. }
+        | FilterExpressionInner::Sigma { key, .. }
+        | FilterExpressionInner::Integer { key, .. }
+        | FilterExpressionInner::Float { key, .. }
+        | FilterExpressionInner::IntegerRange { key, .. }
+        | FilterExpressionInner::FloatRange { key, .. }
+        | FilterExpressionInner::StringRange { key, .. }
+        | FilterExpressionInner::Regex { key, .. }
+        | FilterExpressionInner::Exists { key }
+        | FilterExpressionInner::Null { key } => Ok(key.clone()),
+        _ => Err(pyo3::exceptions::PyAttributeError::new_err("expression has no 'key'")),
+    }
+}
+
+fn expected_from_inner(inner: &FilterExpressionInner) -> PyResult<String> {
+    match inner {
+        FilterExpressionInner::String { expected, .. }
+        | FilterExpressionInner::Wildcard { expected, .. }
+        | FilterExpressionInner::Sigma { expected, .. } => Ok(expected.clone()),
+        FilterExpressionInner::Integer { expected, .. } => Ok(expected.to_string()),
+        FilterExpressionInner::Float { expected, .. } => Ok(expected.to_string()),
+        _ => Err(pyo3::exceptions::PyAttributeError::new_err("expression has no 'expected_value'")),
+    }
+}
+
+fn children_from_inner<'py>(
+    inner: &FilterExpressionInner,
+    py: Python<'py>,
+) -> PyResult<Vec<Bound<'py, PyFilterExpression>>> {
+    let children = match inner {
+        FilterExpressionInner::Not { child } => vec![child.as_ref().clone()],
+        FilterExpressionInner::And { children } => children.clone(),
+        FilterExpressionInner::Or { children } => children.clone(),
+        _ => return Err(pyo3::exceptions::PyAttributeError::new_err("expression has no 'children'")),
+    };
+    children
+        .into_iter()
+        .map(|c| PyFilterExpression { inner: c }.into_pyobject(py))
+        .collect()
+}
+
+// ═══════════════════════════════════════════════════════════
+// Factory-Funktionen (Python-API)
+// ═══════════════════════════════════════════════════════════
+
+/// Factory: Always expression.
+#[pyfunction]
+fn filter_expression(value: bool) -> PyFilterExpression {
+    PyFilterExpression { inner: FilterExpressionInner::Always { value } }
+}
+
+/// Factory: Not expression.
+#[pyfunction]
+#[pyo3(signature = (expression,))]
+fn filter_expression_not(expression: &Bound<'_, PyFilterExpression>) -> PyResult<PyFilterExpression> {
+    let child = expression.borrow().inner.clone();
+    Ok(PyFilterExpression {
+        inner: FilterExpressionInner::Not { child: Box::new(child) },
+    })
+}
+
+/// Factory: And expression.
+#[pyfunction]
+#[pyo3(signature = (*children,))]
+fn filter_expression_and(children: Vec<Bound<'_, PyFilterExpression>>) -> PyResult<PyFilterExpression> {
+    let child_inners: Vec<FilterExpressionInner> = children
+        .iter()
+        .map(|c| c.borrow().inner.clone())
+        .collect();
+    Ok(PyFilterExpression {
+        inner: FilterExpressionInner::And { children: child_inners },
+    })
+}
+
+/// Factory: Or expression.
+#[pyfunction]
+#[pyo3(signature = (*children,))]
+fn filter_expression_or(children: Vec<Bound<'_, PyFilterExpression>>) -> PyResult<PyFilterExpression> {
+    let child_inners: Vec<FilterExpressionInner> = children
+        .iter()
+        .map(|c| c.borrow().inner.clone())
+        .collect();
+    Ok(PyFilterExpression {
+        inner: FilterExpressionInner::Or { children: child_inners },
+    })
+}
+
+/// Factory: StringFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, expected_value))]
+fn filter_expression_string(key: Vec<String>, expected_value: String) -> PyFilterExpression {
+    PyFilterExpression { inner: FilterExpressionInner::String { key, expected: expected_value } }
+}
+
+/// Factory: WildcardStringFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, expected_value))]
+fn filter_expression_wildcard(key: Vec<String>, expected_value: String) -> PyResult<PyFilterExpression> {
+    let regex = build_wildcard_regex(&expected_value)?;
+    Ok(PyFilterExpression { inner: FilterExpressionInner::Wildcard { key, expected: expected_value, regex } })
+}
+
+/// Factory: SigmaFilterExpression (case-insensitive wildcard).
+#[pyfunction]
+#[pyo3(signature = (key, expected_value))]
+fn filter_expression_sigma(key: Vec<String>, expected_value: String) -> PyResult<PyFilterExpression> {
+    let regex = build_sigma_regex(&expected_value)?;
+    Ok(PyFilterExpression { inner: FilterExpressionInner::Sigma { key, expected: expected_value, regex } })
+}
+
+/// Factory: IntegerFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, expected_value))]
+fn filter_expression_integer(key: Vec<String>, expected_value: String) -> PyResult<PyFilterExpression> {
+    let expected_int: i64 = expected_value.parse()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid integer: {}", expected_value)))?;
+    Ok(PyFilterExpression { inner: FilterExpressionInner::Integer { key, expected: expected_int } })
+}
+
+/// Factory: FloatFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, expected_value))]
+fn filter_expression_float(key: Vec<String>, expected_value: String) -> PyResult<PyFilterExpression> {
+    let expected_float: f64 = expected_value.parse()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid float: {}", expected_value)))?;
+    Ok(PyFilterExpression { inner: FilterExpressionInner::Float { key, expected: expected_float } })
+}
+
+/// Factory: IntegerRangeFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, lower, upper, include_lower, include_upper))]
+fn filter_expression_integer_range(
+    key: Vec<String>, lower: i64, upper: i64, include_lower: bool, include_upper: bool,
+) -> PyResult<PyFilterExpression> {
+    if lower > upper {
+        return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
+    }
+    Ok(PyFilterExpression { inner: FilterExpressionInner::IntegerRange { key, lower, upper, incl_low: include_lower, incl_high: include_upper } })
+}
+
+/// Factory: FloatRangeFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, lower, upper, include_lower, include_upper))]
+fn filter_expression_float_range(
+    key: Vec<String>, lower: f64, upper: f64, include_lower: bool, include_upper: bool,
+) -> PyResult<PyFilterExpression> {
+    if !lower.is_finite() || !upper.is_finite() {
+        return Err(pyo3::exceptions::PyValueError::new_err("Range boundaries must be finite"));
+    }
+    if lower > upper {
+        return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
+    }
+    Ok(PyFilterExpression { inner: FilterExpressionInner::FloatRange { key, lower, upper, incl_low: include_lower, incl_high: include_upper } })
+}
+
+/// Factory: StringRangeFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, lower, upper, include_lower, include_upper))]
+fn filter_expression_string_range(
+    key: Vec<String>, lower: String, upper: String, include_lower: bool, include_upper: bool,
+) -> PyResult<PyFilterExpression> {
+    if lower > upper {
+        return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
+    }
+    Ok(PyFilterExpression { inner: FilterExpressionInner::StringRange { key, lower, upper, incl_low: include_lower, incl_high: include_upper } })
+}
+
+/// Factory: RegExFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, regex))]
+fn filter_expression_regex(key: Vec<String>, regex: String) -> PyResult<PyFilterExpression> {
+    let normalized = normalize_regex(&regex);
+    let compiled = Regex::new(&normalized)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e)))?;
+    Ok(PyFilterExpression { inner: FilterExpressionInner::Regex { key, pattern: compiled } })
+}
+
+/// Factory: Exists expression.
+#[pyfunction]
+#[pyo3(signature = (key,))]
+fn filter_expression_exists(key: Vec<String>) -> PyFilterExpression {
+    PyFilterExpression { inner: FilterExpressionInner::Exists { key } }
+}
+
+/// Factory: Null expression.
+#[pyfunction]
+#[pyo3(signature = (key,))]
+fn filter_expression_null(key: Vec<String>) -> PyFilterExpression {
+    PyFilterExpression { inner: FilterExpressionInner::Null { key } }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Rust-Unit-Tests (pure Rust, kein GIL nötig)
+// ═══════════════════════════════════════════════════════════
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::Python;
+    use serde_json::json;
 
     #[test]
     fn always_true_matches() {
-        Python::with_gil(|py| {
-            let expr = PyAlways::new(true);
-            let doc = PyDict::new(py);
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let expr = FilterExpressionInner::Always { value: true };
+        let doc = json!({});
+        assert!(expr.matches(&doc));
     }
 
     #[test]
     fn always_false_does_not_match() {
-        Python::with_gil(|py| {
-            let expr = PyAlways::new(false);
-            let doc = PyDict::new(py);
-            assert!(!expr.does_match(py, &doc.into_any()).unwrap());
-        });
-    }
-
-    #[test]
-    fn string_filter_exact_match() {
-        Python::with_gil(|py| {
-            let expr = PyStringFilterExpression::new(
-                vec!["field".to_string()],
-                "expected".to_string(),
-            );
-            let doc = PyDict::new(py);
-            doc.set_item("field", "expected").unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
-    }
-
-    #[test]
-    fn string_filter_list_membership() {
-        Python::with_gil(|py| {
-            let expr = PyStringFilterExpression::new(
-                vec!["tags".to_string()],
-                "critical".to_string(),
-            );
-            let doc = PyDict::new(py);
-            let list = PyList::new(py, vec!["info", "critical", "warn"]).unwrap();
-            doc.set_item("tags", list).unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
-    }
-
-    #[test]
-    fn exists_matches_present_key() {
-        Python::with_gil(|py| {
-            let expr = PyExists::new(vec!["foo".to_string()]);
-            let doc = PyDict::new(py);
-            doc.set_item("foo", "bar").unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
-    }
-
-    #[test]
-    fn exists_does_not_match_missing_key() {
-        Python::with_gil(|py| {
-            let expr = PyExists::new(vec!["missing".to_string()]);
-            let doc = PyDict::new(py);
-            assert!(!expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let expr = FilterExpressionInner::Always { value: false };
+        let doc = json!({});
+        assert!(!expr.matches(&doc));
     }
 
     #[test]
     fn not_negates_child() {
-        Python::with_gil(|py| {
-            let child = PyAlways::new(false).into_pyobject(py).unwrap();
-            let expr = PyNot::new(&child).unwrap();
-            let doc = PyDict::new(py);
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let child = FilterExpressionInner::Always { value: false };
+        let expr = FilterExpressionInner::Not { child: Box::new(child) };
+        let doc = json!({});
+        assert!(expr.matches(&doc));
     }
 
     #[test]
     fn and_requires_all_children() {
-        Python::with_gil(|py| {
-            let c1 = PyAlways::new(true).into_pyobject(py).unwrap();
-            let c2 = PyAlways::new(false).into_pyobject(py).unwrap();
-            let expr = PyAnd::new(vec![&c1, &c2]).unwrap();
-            let doc = PyDict::new(py);
-            assert!(!expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let c1 = FilterExpressionInner::Always { value: true };
+        let c2 = FilterExpressionInner::Always { value: false };
+        let expr = FilterExpressionInner::And { children: vec![c1, c2] };
+        let doc = json!({});
+        assert!(!expr.matches(&doc));
     }
 
     #[test]
     fn or_requires_any_child() {
-        Python::with_gil(|py| {
-            let c1 = PyAlways::new(false).into_pyobject(py).unwrap();
-            let c2 = PyAlways::new(true).into_pyobject(py).unwrap();
-            let expr = PyOr::new(vec![&c1, &c2]).unwrap();
-            let doc = PyDict::new(py);
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let c1 = FilterExpressionInner::Always { value: false };
+        let c2 = FilterExpressionInner::Always { value: true };
+        let expr = FilterExpressionInner::Or { children: vec![c1, c2] };
+        let doc = json!({});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn string_exact_match() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "expected".into(),
+        };
+        let doc = json!({"field": "expected"});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn string_list_membership() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["tags".into()],
+            expected: "critical".into(),
+        };
+        let doc = json!({"tags": ["info", "critical", "warn"]});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn exists_matches_present_key() {
+        let expr = FilterExpressionInner::Exists { key: vec!["foo".into()] };
+        let doc = json!({"foo": "bar"});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn exists_does_not_match_missing_key() {
+        let expr = FilterExpressionInner::Exists { key: vec!["missing".into()] };
+        let doc = json!({});
+        assert!(!expr.matches(&doc));
+    }
+
+    #[test]
+    fn null_matches_none_value() {
+        let expr = FilterExpressionInner::Null { key: vec!["field".into()] };
+        let doc = json!({"field": null});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn integer_exact_match() {
+        let expr = FilterExpressionInner::Integer {
+            key: vec!["count".into()],
+            expected: 42,
+        };
+        let doc = json!({"count": 42});
+        assert!(expr.matches(&doc));
     }
 
     #[test]
     fn integer_range_inclusive() {
-        Python::with_gil(|py| {
-            let expr = PyIntegerRangeFilterExpression::new(
-                vec!["age".to_string()],
-                18, 65, true, true,
-            );
-            let doc = PyDict::new(py);
-            doc.set_item("age", 25).unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let expr = FilterExpressionInner::IntegerRange {
+            key: vec!["age".into()],
+            lower: 18, upper: 65,
+            incl_low: true, incl_high: true,
+        };
+        let doc = json!({"age": 25});
+        assert!(expr.matches(&doc));
     }
 
     #[test]
-    fn integer_range_excludes_bool() {
-        Python::with_gil(|py| {
-            let expr = PyIntegerRangeFilterExpression::new(
-                vec!["flag".to_string()],
-                0, 100, true, true,
-            );
-            let doc = PyDict::new(py);
-            doc.set_item("flag", true).unwrap();
-            assert!(!expr.does_match(py, &doc.into_any()).unwrap());
-        });
+    fn integer_range_excludes_out_of_bounds() {
+        let expr = FilterExpressionInner::IntegerRange {
+            key: vec!["age".into()],
+            lower: 18, upper: 65,
+            incl_low: true, incl_high: true,
+        };
+        let doc = json!({"age": 10});
+        assert!(!expr.matches(&doc));
     }
 
     #[test]
     fn wildcard_star_matches_any() {
-        Python::with_gil(|py| {
-            let expr = PyWildcardStringFilterExpression::new(
-                vec!["name".to_string()],
-                "foo*bar".to_string(),
-            );
-            let doc = PyDict::new(py);
-            doc.set_item("name", "foobar").unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+        let regex = build_wildcard_regex("foo*bar").unwrap();
+        let expr = FilterExpressionInner::Wildcard {
+            key: vec!["name".into()],
+            expected: "foo*bar".into(),
+            regex,
+        };
+        let doc = json!({"name": "foobar"});
+        assert!(expr.matches(&doc));
     }
 
     #[test]
-    fn regex_with_anchors() {
-        Python::with_gil(|py| {
-            let expr = PyRegExFilterExpression::new(
-                vec!["ip".to_string()],
-                "192\\.168\\..*".to_string(),
-            );
-            let doc = PyDict::new(py);
-            doc.set_item("ip", "192.168.0.1").unwrap();
-            assert!(expr.does_match(py, &doc.into_any()).unwrap());
-        });
+    fn wildcard_question_mark() {
+        let regex = build_wildcard_regex("f?o").unwrap();
+        let expr = FilterExpressionInner::Wildcard {
+            key: vec!["name".into()],
+            expected: "f?o".into(),
+            regex,
+        };
+        let doc = json!({"name": "foo"});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn regex_match() {
+        let pattern = Regex::new("^192\\.168\\..*$").unwrap();
+        let expr = FilterExpressionInner::Regex {
+            key: vec!["ip".into()],
+            pattern,
+        };
+        let doc = json!({"ip": "192.168.0.1"});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn nested_key_access() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["a".into(), "b".into(), "c".into()],
+            expected: "deep".into(),
+        };
+        let doc = json!({"a": {"b": {"c": "deep"}}});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn missing_key_returns_false() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["missing".into()],
+            expected: "x".into(),
+        };
+        let doc = json!({});
+        assert!(!expr.matches(&doc));
+    }
+
+    #[test]
+    fn to_repr_always() {
+        let expr = FilterExpressionInner::Always { value: true };
+        assert_eq!(expr.to_repr(), "*");
+    }
+
+    #[test]
+    fn to_repr_string() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["a".into(), "b".into()],
+            expected: "val".into(),
+        };
+        assert_eq!(expr.to_repr(), "a.b:val");
+    }
+
+    #[test]
+    fn to_repr_not() {
+        let child = FilterExpressionInner::Always { value: true };
+        let expr = FilterExpressionInner::Not { child: Box::new(child) };
+        assert_eq!(expr.to_repr(), "NOT (*)");
     }
 }
 ```
+
+> **Hinweis**: Die `FilterExpressionInner` Enum ist komplett unabhängig von PyO3 nutzbar. Die Match-Logik arbeitet auf `serde_json::Value`, was sowohl für reine Rust-Tests als auch für die Python-Brücke (via `pydict_to_json`) funktioniert.
 
 **Verifizierung:**
 ```bash
@@ -2193,7 +2241,7 @@ cargo test -p logprep-core
 uv run pytest tests/unit/filter/test_filter_expression.py -vvv
 ```
 
-> **Hinweis**: Die Python-Tests laufen zunächst weiter gegen die bestehende Python-Implementierung. Erst in Schritt 2d wird `filter_expression.py` auf Imports umgestellt. Die Rust-Tests verifizieren die Rust-Logik eigenständig.
+> **Hinweis**: Die Python-Tests laufen zunächst weiter gegen die bestehende Python-Implementierung. Erst in Schritt 2c wird der Import umgestellt. Die Rust-Tests verifizieren die Rust-Logik eigenständig (30+ Tests, kein Python-GIL nötig).
 
 **Performance-Test:**
 ```bash
@@ -2204,9 +2252,9 @@ uv run python benchmarks/run_phase_benchmark.py --phase 2 --runs 30 30 30
 
 ### Schritt 2b: Lucene-Parser in Rust
 
-**Ziel**: Einen Lucene-Query-Parser in Rust schreiben, der `luqum` vollständig ersetzt. Der Parser nimmt einen Lucene-Query-String und liefert einen `FilterExpression`-Baum zurück.
+**Ziel**: Einen Lucene-Query-Parser in Rust schreiben, der `luqum` vollständig ersetzt. Der Parser nimmt einen Lucene-Query-String und liefert `FilterExpressionInner`-Bäume zurück.
 
-**Abhängigkeiten**: Schritt 2a (Expression-Klassen in Rust)
+**Abhängigkeiten**: Schritt 2a (Expression-Enum + Hilfsfunktionen in Rust)
 
 **Begründung**: `luqum` ist ein externes Python-Paket mit eigener Lexer/Parser-Architektur. Ein Rust-Parser eliminiert diese Abhängigkeit und erlaubt volle Kontrolle über Fehlerbehandlung und Performance.
 
@@ -2216,7 +2264,6 @@ uv run python benchmarks/run_phase_benchmark.py --phase 2 --runs 30 30 30
 crates/logprep-core/src/filter/
 ├── mod.rs              # pymodule: expression + lucene
 ├── expression.rs       # (aus Schritt 2a)
-├── range.rs            # (aus Schritt 2a)
 └── lucene.rs           # Lucene-Query-Parser (neu)
 ```
 
@@ -2247,7 +2294,7 @@ use std::iter::Peekable;
 use std::str::Chars;
 
 use super::expression::{
-    FilterExpression, FilterExpressionInner,
+    FilterExpressionInner,
     build_wildcard_regex, build_sigma_regex, normalize_regex,
 };
 
@@ -2283,10 +2330,7 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(input: &'a str) -> Self {
-        Self {
-            chars: input.chars().peekable(),
-            pos: 0,
-        }
+        Self { chars: input.chars().peekable(), pos: 0 }
     }
 
     fn next_token(&mut self) -> Token {
@@ -2311,12 +2355,7 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace(&mut self) {
         while let Some(&c) = self.chars.peek() {
-            if c.is_whitespace() {
-                self.chars.next();
-                self.pos += 1;
-            } else {
-                break;
-            }
+            if c.is_whitespace() { self.chars.next(); self.pos += 1; } else { break; }
         }
     }
 
@@ -2330,10 +2369,7 @@ impl<'a> Lexer<'a> {
                 Some(c) if c == quote => { self.pos += 1; break; }
                 Some('\\') => {
                     self.pos += 1;
-                    if let Some(next) = self.chars.next() {
-                        self.pos += 1;
-                        value.push(next);
-                    }
+                    if let Some(next) = self.chars.next() { self.pos += 1; value.push(next); }
                 }
                 Some(c) => { self.pos += 1; value.push(c); }
             }
@@ -2350,10 +2386,7 @@ impl<'a> Lexer<'a> {
                 Some('\\') => {
                     self.pos += 1;
                     pattern.push('\\');
-                    if let Some(next) = self.chars.next() {
-                        self.pos += 1;
-                        pattern.push(next);
-                    }
+                    if let Some(next) = self.chars.next() { self.pos += 1; pattern.push(next); }
                 }
                 Some(c) => { self.pos += 1; pattern.push(c); }
             }
@@ -2366,18 +2399,13 @@ impl<'a> Lexer<'a> {
         while let Some(&c) = self.chars.peek() {
             if c.is_whitespace() || c == '(' || c == ')' || c == '[' || c == ']'
                 || c == '{' || c == '}' || c == ':' || c == '"' || c == '\''
-            {
-                break;
-            }
+            { break; }
             self.chars.next();
             self.pos += 1;
             word.push(c);
         }
         match word.as_str() {
-            "AND" => Token::And,
-            "OR" => Token::Or,
-            "NOT" => Token::Not,
-            "TO" => Token::To,
+            "AND" => Token::And, "OR" => Token::Or, "NOT" => Token::Not, "TO" => Token::To,
             _ => Token::Word(word),
         }
     }
@@ -2385,45 +2413,27 @@ impl<'a> Lexer<'a> {
 
 // ─── Parser ───
 
-struct LuceneParser<'a> {
-    tokens: Vec<Token>,
-    pos: usize,
-    special_fields: SpecialFields,
-}
-
 struct SpecialFields {
     regex_fields: Vec<String>,
     sigma_fields: Vec<String>,
 }
 
-impl<'a> LuceneParser<'a> {
-    fn new(input: &'a str, special_fields: Option<&PyDict>) -> PyResult<Self> {
-        // Tokens sammeln
+struct LuceneParser {
+    tokens: Vec<Token>,
+    pos: usize,
+    special_fields: SpecialFields,
+}
+
+impl LuceneParser {
+    fn new(input: &str, special_fields: &SpecialFields) -> Result<Self, String> {
         let mut lexer = Lexer::new(input);
         let mut tokens = Vec::new();
         loop {
             let tok = lexer.next_token();
-            if tok == Token::Eof {
-                break;
-            }
+            if tok == Token::Eof { break; }
             tokens.push(tok);
         }
-
-        let sf = Self::parse_special_fields(special_fields);
-
-        Ok(Self {
-            tokens,
-            pos: 0,
-            special_fields: sf,
-        })
-    }
-
-    fn parse_special_fields(sf: Option<&PyDict>) -> SpecialFields {
-        // ... aus Python-Dict extrahieren
-        SpecialFields {
-            regex_fields: vec![],
-            sigma_fields: vec![],
-        }
+        Ok(Self { tokens, pos: 0, special_fields: special_fields.clone() })
     }
 
     fn peek(&self) -> &Token {
@@ -2436,53 +2446,43 @@ impl<'a> LuceneParser<'a> {
         tok
     }
 
-    fn expect(&mut self, expected: &Token) -> PyResult<()> {
+    fn expect(&mut self, expected: &Token) -> Result<(), String> {
         let tok = self.advance();
         if &tok != expected {
-            Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Expected {:?}, got {:?}", expected, tok
-            )))
+            Err(format!("Expected {:?}, got {:?}", expected, tok))
         } else {
             Ok(())
         }
     }
 
-    // ─── Grammar-Methoden ───
+    // ─── Grammar ───
 
-    fn parse_query(&mut self) -> PyResult<FilterExpression> {
+    fn parse_query(&mut self) -> Result<FilterExpressionInner, String> {
         self.parse_or()
     }
 
-    fn parse_or(&mut self) -> PyResult<FilterExpression> {
+    fn parse_or(&mut self) -> Result<FilterExpressionInner, String> {
         let mut left = self.parse_and()?;
         while *self.peek() == Token::Or {
             self.advance();
             let right = self.parse_and()?;
-            left = FilterExpression::new(FilterExpressionInner::Or {
-                children: vec![left, right],
-            });
+            left = FilterExpressionInner::Or { children: vec![left, right] };
         }
         Ok(left)
     }
 
-    fn parse_and(&mut self) -> PyResult<FilterExpression> {
+    fn parse_and(&mut self) -> Result<FilterExpressionInner, String> {
         let mut left = self.parse_not()?;
         loop {
             match self.peek() {
                 Token::And => {
                     self.advance();
                     let right = self.parse_not()?;
-                    left = FilterExpression::new(FilterExpressionInner::And {
-                        children: vec![left, right],
-                    });
+                    left = FilterExpressionInner::And { children: vec![left, right] };
                 }
-                Token::Word(_) | Token::Phrase(_) | Token::Star
-                | Token::LParen | Token::Slash => {
-                    // Implizites AND
+                Token::Word(_) | Token::Phrase(_) | Token::Star | Token::LParen | Token::Slash => {
                     let right = self.parse_not()?;
-                    left = FilterExpression::new(FilterExpressionInner::And {
-                        children: vec![left, right],
-                    });
+                    left = FilterExpressionInner::And { children: vec![left, right] };
                 }
                 _ => break,
             }
@@ -2490,19 +2490,17 @@ impl<'a> LuceneParser<'a> {
         Ok(left)
     }
 
-    fn parse_not(&mut self) -> PyResult<FilterExpression> {
+    fn parse_not(&mut self) -> Result<FilterExpressionInner, String> {
         if *self.peek() == Token::Not {
             self.advance();
             let child = self.parse_not()?;
-            Ok(FilterExpression::new(FilterExpressionInner::Not {
-                child: Box::new(child),
-            }))
+            Ok(FilterExpressionInner::Not { child: Box::new(child) })
         } else {
             self.parse_atom()
         }
     }
 
-    fn parse_atom(&mut self) -> PyResult<FilterExpression> {
+    fn parse_atom(&mut self) -> Result<FilterExpressionInner, String> {
         match self.peek().clone() {
             Token::LParen => {
                 self.advance();
@@ -2512,151 +2510,108 @@ impl<'a> LuceneParser<'a> {
             }
             Token::Star => {
                 self.advance();
-                Ok(FilterExpression::new(FilterExpressionInner::Always { value: true }))
+                Ok(FilterExpressionInner::Always { value: true })
             }
             _ => self.parse_term(),
         }
     }
 
-    fn parse_term(&mut self) -> PyResult<FilterExpression> {
+    fn parse_term(&mut self) -> Result<FilterExpressionInner, String> {
         match self.peek().clone() {
             Token::Word(w) => {
-                let field_name = w;
                 self.advance();
                 if *self.peek() == Token::Colon {
                     self.advance();
-                    self.parse_field_value(&field_name)
+                    self.parse_field_value(&w)
                 } else {
-                    // Bare word → Exists
-                    let key = Self::split_dotted_field(&field_name);
-                    Ok(FilterExpression::new(FilterExpressionInner::Exists { key }))
+                    let key = split_dotted_field(&w);
+                    Ok(FilterExpressionInner::Exists { key })
                 }
             }
             Token::Phrase(p) => {
-                // Phrase am Anfang → Fehler oder Exists?
                 self.advance();
-                let key = Self::split_dotted_field(&p);
-                Ok(FilterExpression::new(FilterExpressionInner::Exists { key }))
+                let key = split_dotted_field(&p);
+                Ok(FilterExpressionInner::Exists { key })
             }
-            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unexpected token: {:?}", self.peek()
-            ))),
+            _ => Err(format!("Unexpected token: {:?}", self.peek())),
         }
     }
 
-    fn parse_field_value(&mut self, field_name: &str) -> PyResult<FilterExpression> {
-        let key = Self::split_dotted_field(field_name);
+    fn parse_field_value(&mut self, field_name: &str) -> Result<FilterExpressionInner, String> {
+        let key = split_dotted_field(field_name);
         match self.peek().clone() {
             Token::LBracket | Token::LBrace => self.parse_range(&key),
             Token::Slash => {
                 self.advance();
                 let pattern = match self.advance() {
                     Token::Regex(p) => p,
-                    _ => return Err(pyo3::exceptions::PyValueError::new_err("Expected regex")),
+                    _ => return Err("Expected regex".into()),
                 };
                 let normalized = normalize_regex(&pattern);
-                Ok(FilterExpression::new(FilterExpressionInner::Regex { key, pattern: normalized }))
+                let compiled = regex::Regex::new(&normalized)
+                    .map_err(|e| format!("Invalid regex: {}", e))?;
+                Ok(FilterExpressionInner::Regex { key, pattern: compiled })
             }
-            Token::Word(w) if w == "null" => {
+            Token::Word(ref w) if w == "null" => {
                 self.advance();
-                Ok(FilterExpression::new(FilterExpressionInner::Null { key }))
+                Ok(FilterExpressionInner::Null { key })
             }
             Token::Word(w) => {
                 self.advance();
-                let value = Self::remove_lucene_escaping(&w);
+                let value = remove_lucene_escaping(&w);
                 self.build_value_expression(key, value)
             }
             Token::Phrase(p) => {
                 self.advance();
-                let value = Self::remove_lucene_escaping(&p);
+                let value = remove_lucene_escaping(&p);
                 self.build_value_expression(key, value)
             }
             Token::LParen => {
-                // Field group: field:(expr OR expr)
                 self.advance();
                 let expr = self.parse_query()?;
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
-            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unexpected token after field '{}': {:?}", field_name, self.peek()
-            ))),
+            _ => Err(format!("Unexpected token after field '{}': {:?}", field_name, self.peek())),
         }
     }
 
-    fn parse_range(&mut self, key: &[String]) -> PyResult<FilterExpression> {
+    fn parse_range(&mut self, key: &[String]) -> Result<FilterExpressionInner, String> {
         let include_lower = *self.peek() == Token::LBracket;
         self.advance();
-
         let lower = self.parse_range_boundary()?;
-        if *self.peek() != Token::To {
-            return Err(pyo3::exceptions::PyValueError::new_err("Expected 'TO' in range"));
-        }
+        if *self.peek() != Token::To { return Err("Expected 'TO' in range".into()); }
         self.advance();
         let upper = self.parse_range_boundary()?;
-
         let include_upper = match self.peek() {
-            Token::RBracket => true,
-            Token::RBrace => false,
-            _ => return Err(pyo3::exceptions::PyValueError::new_err("Expected ']' or '}'")),
+            Token::RBracket => true, Token::RBrace => false,
+            _ => return Err("Expected ']' or '}'".into()),
         };
         self.advance();
 
-        // Typ bestimmen: int → float → string
         if let (Ok(lo), Ok(hi)) = (lower.parse::<i64>(), upper.parse::<i64>()) {
-            if lo > hi {
-                return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
-            }
-            Ok(FilterExpression::new(FilterExpressionInner::IntegerRange {
-                key: key.to_vec(),
-                lower: lo, upper: hi,
-                include_lower, include_upper,
-            }))
+            if lo > hi { return Err("Range lower > upper".into()); }
+            Ok(FilterExpressionInner::IntegerRange { key: key.to_vec(), lower: lo, upper: hi, incl_low: include_lower, incl_high: include_upper })
         } else if let (Ok(lo), Ok(hi)) = (lower.parse::<f64>(), upper.parse::<f64>()) {
-            if !lo.is_finite() || !hi.is_finite() {
-                return Err(pyo3::exceptions::PyValueError::new_err("Range boundaries must be finite"));
-            }
-            if lo > hi {
-                return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
-            }
-            Ok(FilterExpression::new(FilterExpressionInner::FloatRange {
-                key: key.to_vec(),
-                lower: lo, upper: hi,
-                include_lower, include_upper,
-            }))
+            if lo > hi { return Err("Range lower > upper".into()); }
+            Ok(FilterExpressionInner::FloatRange { key: key.to_vec(), lower: lo, upper: hi, incl_low: include_lower, incl_high: include_upper })
         } else {
-            // String range
-            if lower == "*" || upper == "*" {
-                return Err(pyo3::exceptions::PyValueError::new_err("Open boundaries not supported"));
-            }
-            if lower > upper {
-                return Err(pyo3::exceptions::PyValueError::new_err("Range lower > upper"));
-            }
-            Ok(FilterExpression::new(FilterExpressionInner::StringRange {
-                key: key.to_vec(),
-                lower, upper,
-                include_lower, include_upper,
-            }))
+            if lower == "*" || upper == "*" { return Err("Open boundaries not supported".into()); }
+            if lower > upper { return Err("Range lower > upper".into()); }
+            Ok(FilterExpressionInner::StringRange { key: key.to_vec(), lower, upper, incl_low: include_lower, incl_high: include_upper })
         }
     }
 
-    fn parse_range_boundary(&mut self) -> PyResult<String> {
+    fn parse_range_boundary(&mut self) -> Result<String, String> {
         match self.advance() {
             Token::Word(w) => Ok(w),
             Token::Phrase(p) => Ok(p),
-            Token::Star => Err(pyo3::exceptions::PyValueError::new_err("Open boundaries not supported")),
-            other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid range boundary: {:?}", other
-            ))),
+            Token::Star => Err("Open boundaries not supported".into()),
+            other => Err(format!("Invalid range boundary: {:?}", other)),
         }
     }
 
-    fn build_value_expression(
-        &self,
-        key: Vec<String>,
-        value: String,
-    ) -> PyResult<FilterExpression> {
-        // Prüfe regex_fields / sigma_fields / |re modifier
+    fn build_value_expression(&self, key: Vec<String>, value: String) -> Result<FilterExpressionInner, String> {
         let dotted = key.join(".");
         let last = key.last().map(|s| s.as_str()).unwrap_or("");
         let (field_name, modifier) = if let Some(pos) = last.find('|') {
@@ -2674,145 +2629,285 @@ impl<'a> LuceneParser<'a> {
                 vec![field_name.to_string()]
             };
             let normalized = normalize_regex(&value);
-            return Ok(FilterExpression::new(FilterExpressionInner::Regex {
-                key: actual_key,
-                pattern: normalized,
-            }));
+            let compiled = regex::Regex::new(&normalized)
+                .map_err(|e| format!("Invalid regex: {}", e))?;
+            return Ok(FilterExpressionInner::Regex { key: actual_key, pattern: compiled });
         }
 
         if self.special_fields.sigma_fields.contains(&dotted)
             || self.special_fields.sigma_fields.contains(&"true".to_string())
         {
             let regex = build_sigma_regex(&value)?;
-            return Ok(FilterExpression::new(FilterExpressionInner::Sigma {
-                key, expected: value, regex,
-            }));
+            return Ok(FilterExpressionInner::Sigma { key, expected: value, regex });
         }
 
         if self.special_fields.regex_fields.contains(&dotted) {
             let normalized = normalize_regex(&value);
-            return Ok(FilterExpression::new(FilterExpressionInner::Regex {
-                key, pattern: normalized,
-            }));
+            let compiled = regex::Regex::new(&normalized)
+                .map_err(|e| format!("Invalid regex: {}", e))?;
+            return Ok(FilterExpressionInner::Regex { key, pattern: compiled });
         }
 
-        // Default: Wildcard-Check
         if value.contains('*') || value.contains('?') {
             let regex = build_wildcard_regex(&value)?;
-            Ok(FilterExpression::new(FilterExpressionInner::Wildcard {
-                key, expected: value, regex,
-            }))
+            Ok(FilterExpressionInner::Wildcard { key, expected: value, regex })
         } else {
-            Ok(FilterExpression::new(FilterExpressionInner::String {
-                key, expected: value,
-            }))
+            Ok(FilterExpressionInner::String { key, expected: value })
         }
     }
+}
 
-    fn split_dotted_field(field: &str) -> Vec<String> {
-        if !field.contains('\\') {
-            return field.split('.').map(String::from).collect();
-        }
-        // Escaping beachten (wie in Phase 1)
-        let mut result = Vec::new();
-        let mut buffer = String::new();
-        let mut chars = field.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '.' => result.push(std::mem::take(&mut buffer)),
-                '\\' => match chars.next() {
-                    Some(next) => buffer.push(next),
-                    None => buffer.push('\\'),
-                },
-                _ => buffer.push(c),
-            }
-        }
-        result.push(buffer);
-        result
+// ─── Hilfsfunktionen ───
+
+fn split_dotted_field(field: &str) -> Vec<String> {
+    if !field.contains('\\') {
+        return field.split('.').map(String::from).collect();
     }
+    let mut result = Vec::new();
+    let mut buffer = String::new();
+    let mut chars = field.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '.' => result.push(std::mem::take(&mut buffer)),
+            '\\' => match chars.next() {
+                Some(next) => buffer.push(next),
+                None => buffer.push('\\'),
+            },
+            _ => buffer.push(c),
+        }
+    }
+    result.push(buffer);
+    result
+}
 
-    fn remove_lucene_escaping(s: &str) -> String {
-        // Vereinfacht: backslash vor Spezialzeichen entfernen
-        let mut result = String::with_capacity(s.len());
-        let mut chars = s.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                if let Some(&next) = chars.peek() {
-                    if next.is_alphanumeric() || next == '_' || next == '.' || next == '-'
-                        || next == '(' || next == ')' || next == '[' || next == ']'
-                        || next == '{' || next == '}' || next == ':' || next == '^'
-                        || next == '~' || next == '\\' || next == '"' || next == '+'
-                    {
-                        result.push(next);
-                        chars.next();
-                        continue;
-                    }
+/// Entfernt Lucene-Escaping aus einem String.
+pub fn remove_lucene_escaping(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                if next.is_alphanumeric() || next == '_' || next == '.' || next == '-'
+                    || next == '(' || next == ')' || next == '[' || next == ']'
+                    || next == '{' || next == '}' || next == ':' || next == '^'
+                    || next == '~' || next == '\\' || next == '"' || next == '+'
+                {
+                    result.push(next);
+                    chars.next();
+                    continue;
                 }
             }
-            result.push(c);
         }
-        result
+        result.push(c);
     }
+    result
 }
 
-// ─── Python-Brücke ───
-
-#[pyfunction]
-#[pyo3(signature = (query_string, special_fields=None))]
-fn parse_lucene_query(
-    py: Python,
-    query_string: &str,
-    special_fields: Option<&Bound<'_, PyDict>>,
-) -> PyResult<FilterExpression> {
-    // Escaping anwenden (wie LuceneFilter._add_lucene_escaping)
-    let escaped = add_lucene_escaping(query_string)?;
-    let mut parser = LuceneParser::new(&escaped, special_fields)?;
-    parser.parse_query()
-}
-
-fn add_lucene_escaping(s: &str) -> PyResult<String> {
-    // Port der Python-Logik aus lucene_filter.py
+/// Wendet Lucene-Escaping auf einen Query-String an (äquivalent zu Python `_add_lucene_escaping`).
+pub fn add_lucene_escaping(s: &str) -> Result<String, String> {
     let s = make_uneven_double_quotes_escaping(s)?;
     let s = escape_ends_of_expressions(&s);
     Ok(s)
 }
 
-fn make_uneven_double_quotes_escaping(s: &str) -> PyResult<String> {
-    // ... äquivalent zu Python
-    Ok(s.to_string())
+fn make_uneven_double_quotes_escaping(s: &str) -> Result<String, String> {
+    // Port der Python-Logik aus lucene_filter.py
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            result.push('\\');
+            if let Some(&next) = chars.peek() {
+                if next == '"' {
+                    // Doppelten Backslash hinzufügen, damit Anzahl ungerade wird
+                    result.push('\\');
+                }
+                result.push(next);
+                chars.next();
+            } else {
+                result.push('\\');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    Ok(result)
 }
 
 fn escape_ends_of_expressions(s: &str) -> String {
-    // ... äquivalent zu Python
-    s.to_string()
+    // Port der Python-Logik: escaping von " am Ende von Ausdrücken
+    let keywords = [" AND ", " OR ", " NOT ", " TO "];
+    let mut result = s.to_string();
+
+    for keyword in &keywords {
+        while let Some(pos) = result.rfind(keyword) {
+            let end = pos + keyword.len();
+            let before = &result[..pos];
+            let mut quote_count = 0;
+            let mut chars_before = before.chars().rev();
+            while let Some(c) = chars_before.next() {
+                if c == '\\' { quote_count += 1; } else { break; }
+            }
+            if quote_count % 2 == 0 {
+                // Gerade Anzahl → kein Escaping → Backslash hinzufügen
+                result.insert(pos, '\\');
+            }
+            break; // Nur einmal pro Keyword
+        }
+    }
+    result
+}
+
+// ─── Python-Brücke ───
+
+/// Parse-Funktion die von Python aufgerufen wird.
+/// Nimmt einen Lucene-Query-String und liefert ein PyFilterExpression zurück.
+#[pyfunction]
+#[pyo3(signature = (query_string, special_fields=None))]
+pub fn parse_lucene_query(
+    query_string: &str,
+    special_fields: Option<&Bound<'_, PyDict>>,
+) -> PyResult<crate::filter::expression::PyFilterExpression> {
+    let escaped = add_lucene_escaping(query_string)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    let sf = parse_special_fields(special_fields);
+    let mut parser = LuceneParser::new(&escaped, &sf)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    let inner = parser.parse_query()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    Ok(crate::filter::expression::PyFilterExpression { inner })
+}
+
+fn parse_special_fields(sf: Option<&Bound<'_, PyDict>>) -> SpecialFields {
+    let mut regex_fields = Vec::new();
+    let mut sigma_fields = Vec::new();
+
+    if let Some(dict) = sf {
+        if let Ok(Some(val)) = dict.get_item("regex_fields") {
+            if let Ok(list) = val.downcast::<PyList>() {
+                for item in list.iter() {
+                    if let Ok(s) = item.extract::<String>() {
+                        regex_fields.push(s);
+                    }
+                }
+            }
+        }
+        if let Ok(Some(val)) = dict.get_item("sigma_fields") {
+            if let Ok(list) = val.downcast::<PyList>() {
+                for item in list.iter() {
+                    if let Ok(s) = item.extract::<String>() {
+                        sigma_fields.push(s);
+                    }
+                }
+            }
+        }
+    }
+
+    SpecialFields { regex_fields, sigma_fields }
+}
+
+// ─── Rust-Unit-Tests ───
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_word() {
+        let inner = parse_lucene_string("foo", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Exists { .. }));
+    }
+
+    #[test]
+    fn parse_always_star() {
+        let inner = parse_lucene_string("*", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Always { value: true }));
+    }
+
+    #[test]
+    fn parse_field_value() {
+        let inner = parse_lucene_string("status:200", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        match inner {
+            FilterExpressionInner::String { key, expected } => {
+                assert_eq!(key, vec!["status".to_string()]);
+                assert_eq!(expected, "200");
+            }
+            _ => panic!("Expected String"),
+        }
+    }
+
+    #[test]
+    fn parse_and_expression() {
+        let inner = parse_lucene_string("foo AND bar", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::And { .. }));
+    }
+
+    #[test]
+    fn parse_or_expression() {
+        let inner = parse_lucene_string("foo OR bar", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Or { .. }));
+    }
+
+    #[test]
+    fn parse_not_expression() {
+        let inner = parse_lucene_string("NOT foo", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Not { .. }));
+    }
+
+    #[test]
+    fn parse_range_bracket() {
+        let inner = parse_lucene_string("age:[18 TO 65]", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::IntegerRange { .. }));
+    }
+
+    #[test]
+    fn parse_regex_field() {
+        let inner = parse_lucene_string("ip:/192\\.168\\..*/", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Regex { .. }));
+    }
+
+    #[test]
+    fn parse_null_field() {
+        let inner = parse_lucene_string("field:null", &SpecialFields { regex_fields: vec![], sigma_fields: vec![] }).unwrap();
+        assert!(matches!(inner, FilterExpressionInner::Null { .. }));
+    }
+
+    fn parse_lucene_string(input: &str, sf: &SpecialFields) -> Result<FilterExpressionInner, String> {
+        let escaped = add_lucene_escaping(input)?;
+        let mut parser = LuceneParser::new(&escaped, sf)?;
+        parser.parse_query()
+    }
+
+    #[test]
+    fn remove_escaping_simple() {
+        assert_eq!(remove_lucene_escaping("foo"), "foo");
+        assert_eq!(remove_lucene_escaping(r"foo\:bar"), "foo:bar");
+        assert_eq!(remove_lucene_escaping(r"foo\\bar"), r"foo\bar");
+    }
 }
 ```
 
-#### Python-Modul (`logprep/filter/expression/__init__.py`):
+#### PyO3-Modul (`crates/logprep-core/src/lib.rs`):
 
-```python
-"""Filter expression — Rust-backed classes from logprep._rust.filter."""
+```diff
+ use pyo3::prelude::*;
 
-from logprep._rust.filter import (  # noqa: F401
-    FilterExpression,
-    FilterExpressionError,
-    KeyDoesNotExistError,
-    Always,
-    Not,
-    And,
-    Or,
-    StringFilterExpression,
-    WildcardStringFilterExpression,
-    SigmaFilterExpression,
-    IntegerFilterExpression,
-    FloatFilterExpression,
-    IntegerRangeFilterExpression,
-    FloatRangeFilterExpression,
-    StringRangeFilterExpression,
-    RegExFilterExpression,
-    Exists,
-    Null,
-)
+ pub mod field;
++pub mod filter;
+
+ #[pymodule]
+ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
++    // Filter
++    m.add_submodule(filter::filter(m)?)?;
++
+     // Field (Phase 1)
+     m.add_function(wrap_pyfunction!(field::get_dotted_field_list, m)?)?;
+     // ... (bestehende Funktionen)
+     Ok(())
+ }
 ```
 
 **Verifizierung:**
@@ -2829,18 +2924,64 @@ uv run python benchmarks/run_phase_benchmark.py --phase 2 --runs 30 30 30
 
 ---
 
-### Schritt 2c: Python-Bridge für LuceneFilter
+### Schritt 2c: Python-Bridge (Import-Wrapper)
 
-**Ziel**: `lucene_filter.py` wird auf einen Thin Wrapper reduziert, der `LuceneFilter.create()` als Python-API beibehält, aber die entire Parsing- und Transformer-Logik in Rust delegiert.
+**Ziel**: Python-Importstruktur umstellen — `expression/__init__.py` re-exportiert Rust-Klassen, `lucene_filter.py` wird Thin Wrapper.
 
-**Abhängigkeiten**: Schritt 2b (Lucene-Parser in Rust)
+**Abhängigkeiten**: Schritt 2b (Rust-Parser + Expression-Adapter vollständig)
+
+**Änderungen an Import-Sites**: Die Factory-Funktionen ersetzen die alten Klassen-Konstruktoren. Die Python-Wrapper in `expression/__init__.py` bieten die alte API als Aliase.
+
+#### Neue `logprep/filter/expression/__init__.py`:
+
+```python
+"""Filter expression — Rust-backed classes from logprep._rust.filter.
+
+Die ursprünglichen 15 Python-Klassen werden durch eine einzige Rust-Klasse
+``PyFilterExpression`` ersetzt. Factory-Funktionen bieten die alte API unter
+denselben Namen.
+"""
+
+from logprep._rust.filter import (  # noqa: F401
+    FilterExpression,
+    FilterExpressionError,
+    KeyDoesNotExistError,
+)
+
+# Alias: Die alte Python-Klasse `FilterExpression` wird durch die Rust-Klasse ersetzt.
+# Die Rust-Klasse `PyFilterExpression` heißt in Python `FilterExpression`.
+FilterExpression = FilterExpression
+
+# Factory-Funktionen als Klassen-Äquivalente:
+# Statt `Always(True)` → `FilterExpression.always(True)` oder `Always(True)`
+# wird bereitgestellt als Modul-Funktionen die die alte API nachbilden.
+
+from logprep._rust.filter import (
+    filter_expression as Always,
+    filter_expression_not as Not,
+    filter_expression_and as And,
+    filter_expression_or as Or,
+    filter_expression_string as StringFilterExpression,
+    filter_expression_wildcard as WildcardStringFilterExpression,
+    filter_expression_sigma as SigmaFilterExpression,
+    filter_expression_integer as IntegerFilterExpression,
+    filter_expression_float as FloatFilterExpression,
+    filter_expression_integer_range as IntegerRangeFilterExpression,
+    filter_expression_float_range as FloatRangeFilterExpression,
+    filter_expression_string_range as StringRangeFilterExpression,
+    filter_expression_regex as RegExFilterExpression,
+    filter_expression_exists as Exists,
+    filter_expression_null as Null,
+)
+
+# KeyDoesNotExistError wird als Exception-Klasse bereitgestellt
+KeyDoesNotExistError = KeyDoesNotExistError
+```
 
 #### Neue `logprep/filter/lucene_filter.py`:
 
 ```python
 """Lucene filter — thin wrapper around Rust implementation."""
-
-from typing import Sequence
 
 from logprep._rust.filter import (
     FilterExpression,
@@ -2886,18 +3027,29 @@ class LuceneFilter:
             ) from error
 ```
 
-Die gesamte `LuceneTransformer`-Klasse und alle Escaping-Methoden werden aus Python entfernt — sie existieren nur noch in Rust.
-
 **Anpassungen an Import-Sites:**
 
-Alle Importe von `logprep.filter.expression.filter_expression` bleiben unverändert — das `__init__.py` re-exportiert die Rust-Klassen unter demselben Pfad. Keine Änderungen nötig in:
+Alle bestehenden Importe funktionieren weiterhin, da `expression/__init__.py` dieselben Namen re-exportiert. Keine Änderungen nötig in:
 
-- `logprep/processor/base/rule.py`
-- `logprep/processor/list_comparison/rule.py`
-- `logprep/processor/replacer/rule.py`
-- `logprep/processor/dissector/rule.py`
-- `logprep/framework/rule_tree/*.py`
-- `logprep/util/event.py`
+- `logprep/processor/base/rule.py` → `FilterExpression` (Typ-Annotation)
+- `logprep/processor/list_comparison/rule.py` → `FilterExpression`
+- `logprep/processor/replacer/rule.py` → `FilterExpression`
+- `logprep/processor/dissector/rule.py` → `FilterExpression`
+- `logprep/framework/rule_tree/rule_tree.py` → `FilterExpression`
+- `logprep/framework/rule_tree/node.py` → `FilterExpression`, `KeyDoesNotExistError`
+- `logprep/framework/rule_tree/rule_parser.py` → `Always`, `Exists`, `Not`
+- `logprep/framework/rule_tree/rule_segmenter.py` → `Always`, `And`, `Exists`, `FilterExpression`, `Not`, `Or`
+- `logprep/framework/rule_tree/rule_sorter.py` → `FilterExpression`, `KeyBasedFilterExpression`
+- `logprep/framework/rule_tree/demorgan_resolver.py` → `And`, `FilterExpression`, `Not`, `Or`
+- `logprep/framework/rule_tree/rule_tagger.py` → `Exists`, `FilterExpression`
+- `logprep/util/event.py` → `KeyDoesNotExistError`
+
+**Wichtig**: Die Factory-Funktionen (`Always`, `And`, `Or`, etc.) werden als Funktionen re-exportiert — Aufrufe wie `Always(True)` oder `And(child1, child2)` funktionieren weiterhin, da die Factory-Funktionen dieselben Signaturen haben.
+
+**API-Änderung** (minimal, aber notwendig):
+- `FilterExpression` ist jetzt eine einzelne Rust-Klasse statt einer Python-Vererbungshierarchie
+- `isinstance(expr, Always)` → `expr.expression_type == "Always"` (oder `isinstance` mit Rust-Klasse)
+- Für `KeyBasedFilterExpression`-Attribut-Zugriffe: `expr.key`, `expr.key_as_dotted_string`, `expr.expected_value` funktionieren über `@getter` in der Rust-Klasse
 
 **Verifizierung:**
 ```bash
@@ -2932,7 +3084,7 @@ uv run python benchmarks/run_phase_benchmark.py --phase 2 --runs 30 30 30
 | Datei | Grund |
 |---|---|
 | `logprep/filter/__init__.py` | Package-init |
-| `logprep/filter/expression/__init__.py` | Re-export aus Rust (Schritt 2b) |
+| `logprep/filter/expression/__init__.py` | Re-export aus Rust (Schritt 2c) |
 
 #### pyproject.toml Änderung
 
@@ -2964,7 +3116,7 @@ Die `luqum`-Abhängigkeit verschwindet aus `uv.lock`.
 Einige Tests in `tests/unit/filter/test_lucene_filter.py` testen interne Escaping-Methoden, die nur noch in Rust existieren. Diese Tests werden:
 
 1. **Beibehalten** als Rust-Unit-Tests in `crates/logprep-core/src/filter/lucene.rs`
-2. **Aus Python entfernt** (测试 die internen Rust-Methoden nicht mehr direkt)
+2. **Aus Python entfernt** (testen die internen Rust-Methoden nicht mehr direkt)
 
 Testklassen die angepasst werden müssen:
 - `test_make_uneven_double_quotes_escaping` → Rust-Test
@@ -3003,10 +3155,10 @@ uv run python benchmarks/compare_phases.py --phase-baseline 1 --phase-current 2
 
 | # | Beschreibung | Betrifft | Risiko |
 |---|---|---|---|
-| 2a | `regex` Crate + 14 Expression-Klassen in Rust | Nur neue Rust-Dateien, `Cargo.toml` | Niedrig — kein Python-Code betroffen |
-| 2b | Lucene-Parser in Rust (ersetzt `luqum`) | Nur neue Rust-Dateien | Mittel — Parser-Logik komplex |
-| 2c | Python-Bridge: `lucene_filter.py` → Thin Wrapper, `expression/__init__.py` → Rust-Imports | `lucene_filter.py`, `expression/__init__.py` | Hoch — API-Vertrag muss identisch bleiben |
-| 2d | Aufräumen: `filter_expression.py` löschen, `luqum` entfernen | `pyproject.toml`, Tests, `uv.lock` | Niedrig — nur Aufräumen |
+| 2a | `regex` Crate + `FilterExpressionInner` (pure Rust Enum) + PyO3 Adapter + Factory-Funktionen | Nur neue Rust-Dateien, `Cargo.toml` | Niedrig — kein Python-Code betroffen, Rust-Tests verifizieren |
+| 2b | Lucene-Parser in Rust (Lexer + Parser + Escaping, ersetzt `luqum`) | Nur neue Rust-Dateien | Mittel — Parser-Logik komplex, aber Rust-Tests |
+| 2c | Python-Bridge: `expression/__init__.py` → Rust-Imports + Factory-Aliase, `lucene_filter.py` → Thin Wrapper | `lucene_filter.py`, `expression/__init__.py` | Hoch — API-Vertrag muss identisch bleiben |
+| 2d | Aufräumen: `filter_expression.py` löschen, `luqum` entfernen, Testanpassungen | `pyproject.toml`, Tests, `uv.lock` | Niedrig — nur Aufräumen |
 
 **Jeder Commit** muss:
 1. Alle bestehenden Tests bestehen (`uv run pytest ./tests -vvv`)
@@ -3028,7 +3180,7 @@ uv run python benchmarks/compare_phases.py --phase-baseline 1 --phase-current 2
 # Ergebnis in BENCHMARK_HISTORY.md eintragen
 ```
 
-**Erwarteter Impact**: Die Filter-Matching-Logik ist der Hot-Path für jedes Rule-Matching. Die Rust-Implementierung sollte einen messbaren Throughput-Gewinn liefern, da pro Nachricht dutzende bis hunderte Filter-Aufrufe stattfinden. Der Wegfall von `luqum` als Build-Dependency vereinfacht zudem den Build-Prozess.
+**Erwarteter Impact**: Die Filter-Matching-Logik ist der Hot-Path für jedes Rule-Matching. Die Rust-Implementierung (Enum-basiert, `serde_json::Value` statt Python-Dicts) eliminiert den Python-Overhead komplett. Der `luqum`-Parser wird durch einen nativen Rust-Parser ersetzt. Die Rust-Klassen sind unabhängig von PyO3 nutzbar (z.B. für zukünftige Rust-nur Pipelines).
 
 ---
 
