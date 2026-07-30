@@ -94,66 +94,409 @@ Die Applikation muss zu jedem Zeitpunkt weiter ausführbar bleiben.
 
 ## Phase 4: Processor-Core (Einfache Processor)
 
-**Ziel**: Einfache, rechenintensive Processor komplett in Rust implementieren, mit Python-Brücke für `logprep/ng/`.
+**Ziel**: Jeder einfache, rechenintensive Processor wird — inklusive seiner gesamten Rule-Definition, Rule-Validierung, RuleTree-Anbindung und Rule-Anwendung — **komplett in Rust** implementiert. Der Python-Layer für `logprep/ng/processor/<name>/processor.py` ist ein **dünner API-Adapter ohne Event-Verarbeitung**: er lädt Regel-Dicts, reicht sie an die Rust-Implementierung weiter und ruft deren `process(event)` auf. **Kein einziger Prozessor verarbeitet nach Phase 4 noch Events in Python**. Die `rule_tree` wird ausschließlich **aus Rust heraus** konsumiert; Python-Code ruft an keiner Stelle mehr `tree.get_matching_rules(...)` auf. Sämtliche externen Python-Bibliotheken der neun priorisierten Prozessoren (`pyparsing`, `msgspec`, `base64`, Python-`re`, `attrs`, `dataclasses`, `functools.partial`, `functools.cached_property`, `timeout`-Decorator) werden durch Rust-Crates oder direkt in Rust geschriebenen Code ersetzt. Die in Phase 1 migrierten Helper (`pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, …) werden in Phase 4 wiederverwendet, nicht neu implementiert.
 
-**Begründung**: Alle Prozessoren nutzen die Rust-Helfer (Phase 1) und den Rust-Filter (Phase 2). Die ng/-Basis wird direkt in Rust entwickelt.
+**Begründung**:
+- Nach Phase 1–3 ist die gesamte Filter-/Rule-Infrastruktur in Rust (`FilterExpressionInner`, `TreeInner`, `RuleParserInner`). Ein Verbleib der Processor-Logik in Python würde den `serde_json::Value` ↔ `dict`-Round-Trip pro Event und Regel erzwingen — der größte verbliebene Hot-Path-Overhead.
+- Indem die Rule-Datenstrukturen (z. B. `DropperRule`, `FieldManagerRule`) in Rust definiert und validiert werden, fällt der `attrs`-Validator-Overhead pro `add_rule` weg, und die Validierungslogik kann zwischen `add_rule` und `process` streng typisiert geteilt werden.
+- Externe Bibliotheken wie `pyparsing` (Calculator), `msgspec` (Decoder), `attrs` (alle Rule-Klassen) und `re` (Dissector/Replacer) ziehen jeweils C-Extension-Overhead, globale Locks oder großen Speicherbedarf nach sich. Rust-Äquivalente (`meval`/eigener Pratt-Parser, `serde_json`, `serde::Deserialize`, `regex`) sind bereits als Crates verfügbar oder werden in 4a direkt geschrieben.
+- Ein dünner Python-Adapter stellt sicher, dass die bestehende `ng.abc.processor.Processor`-Schnittstelle (mit `setup`, `metrics`, `process(event) -> LogEvent`) erhalten bleibt, ohne dass Logik dupliziert wird.
 
-### Priorisierte Processor (niedrige externe Abhängigkeiten)
+### Leitprinzipien (verbindlich)
 
-| Processor | Begründung |
-|---|---|
-| `dropper` | Simpleste Logik, Referenz |
-| `deleter` | Ähnlich wie dropper |
-| `field_manager` | Zentrale Feldmanipulation |
-| `concatenator` | String-Konkatenation |
-| `string_splitter` | String-Operationen |
-| `calculator` | Numerische Berechnungen |
-| `dissector` | Pattern-basierte Aufteilung |
-| `replacer` | String-Ersetzung |
-| `decoder` | Base64/Hex-Decoding |
+1. **Kein Event wird in Python verarbeitet**: Weder `logprep/ng/processor/<name>/processor.py` noch `logprep/ng/abc/processor.py` iterieren über Event-Felder, rufen `pop_dotted_field_value`/`add_fields_to`/`get_dotted_field_value` zur Rule-Anwendung auf oder werten `for rule in matching_rules` aus. Jede `process(event)`-Methode in der Python-Wrapper-Klasse hat exakt die Form:
+   ```python
+   async def process(self, event):
+       self._event = event
+       self._rust.process(event.data)
+       return self._event
+   ```
+   (Metrik-Updates erfolgen entweder in Rust oder als ein einziges `for rule in self._rules: rule.metrics.number_of_processed_events += 1` — beides außerhalb des Event-Verarbeitungs-Pfads.)
 
-### Architektur
+2. **rule_tree nur via Rust**: `tree.get_matching_rules(...)` wird ausschließlich innerhalb der Rust-Processor-Implementierung aufgerufen. Python-Code sieht nur das Endergebnis (`event.data` mutiert).
 
-Jeder Processor als PyO3-Klasse mit `process(event)` Methode:
+3. **Rule komplett in Rust**: Die für den Processor spezifische Rule-Struktur (Felder, Defaults, Validatoren) wird in Rust als eigenes Struct mit `serde::Deserialize` definiert. `attrs` wird nicht mehr für Rule-Klassen verwendet. Python-`Rule`-Klasse bleibt für File-I/O, Filter-Parsing und Metriken bestehen; sie hält jedoch nur noch eine `rule_id`-Referenz auf die echte Rule in der Rust-Instanz.
+
+4. **Externe Python-Bibliotheken → Rust-Crate oder Rust-Implementierung**: Die Tabelle in [§4.0 Crate-Entscheidungen](#40-crate-entscheidungen) ist verbindlich. Keine Phase-4-Implementierung darf eine dort nicht aufgeführte externe Python-Bibliothek einführen.
+
+5. **Phase-1-Helper werden wiederverwendet**: Die in Phase 1 nach Rust portierten Funktionen (`pop_dotted_field_value`, `pop_field_value`, `add_field_to`, `add_field_to_silent_fail`, `add_and_overwrite_key`, `add_and_not_overwrite_key`, `get_dotted_field_value`, `get_dotted_field_value_with_missing`, `get_dotted_field_values`, `has_dotted_field`, `get_source_fields_dict`, `resolve_template`, `add_and_overwrite`, `append`, `append_as_list`, `get_dotted_field_list`, `field_list_to_dotted_field`, `join_dotted_fields`) werden in Phase 4 über `pub(crate) fn` aus `crates/logprep-core/src/field/value.rs` konsumiert (siehe Subphase 4a). **Diese Funktionen werden in Phase 4 nicht reimplementiert.** Deduplizierung wird durch direkten Funktionsaufruf sichergestellt.
+
+6. **Kein Python-Fallback**: Nach Phase 4 gibt es für `pop_dotted_field_value` etc. weiterhin den PyO3-Wrapper (in `crates/logprep-core/src/field/py.rs`) — dieser ist nun aber ein **dünner Adapter**, der `field::value::pop_dotted_field_value` aufruft, nicht umgekehrt. Wer in `process()` der ng-Processor-Klasse noch `pop_dotted_field_value` direkt aufruft, signalisiert, dass die Migration des Prozessors unvollständig ist.
+
+7. **Filter-Parsing bleibt Python-seitig**: `LuceneFilter.create(...)` aus Phase 2 liefert eine `FilterExpression` (Rust-Klasse) zurück. Die `add_rule`-Pipeline des Rust-Prozessors nimmt diesen Filter (via `FilterExpressionInner::from_py_object`) entgegen, parst ihn über den bereits existierenden `RuleParserInner` in Segmente und fügt sie dem internen `TreeInner` hinzu. Der Python-`RuleLoader` bleibt für File-I/O zuständig.
+
+### Architektur (Ist vs. Soll)
+
+**Ist (vor Phase 4)**:
+```
+Python: Processor.process(event)
+  → ng.abc.processor._process_rule_tree(event, self._rule_tree)   # Python-Wrapper
+    → tree.get_matching_rules(event)                              # delegiert an Rust
+    → for rule in matching_rules: rule.matches(event)             # Python-Methode
+    → self._apply_rules(event, rule)                              # Python-Subclass
+      → pop_dotted_field_value / add_fields_to / ...              # Python-Helper → Rust
+      → pyparsing / msgspec / re / base64 / attrs                 # externe Libs
+```
+
+**Soll (nach Phase 4)**:
+```
+Python: Processor.process(event)               # 3–5 Zeilen, KEINE Event-Verarbeitung
+  → rust_processor.process(event)              # 1 Aufruf, alles in Rust
+    ↳ TreeInner::get_matching_rules            # Rust (Phase 3)
+    ↳ für jede rule_id: RustRule::apply(...)   # Rust
+    ↳ field::value::pop_dotted_field_value     # Rust (Phase 1, wiederverwendet)
+    ↳ field::value::add_field_to               # Rust (Phase 1, wiederverwendet)
+    ↳ meval / serde_json / regex               # Crates statt Python-Libs
+    ↳ Event als serde_json::Value mutiert      # 0 Python-Roundtrips pro Rule
+```
+
+### 4.0 Crate-Entscheidungen
+
+| Externe Python-Bibliothek | Verwendet in | Rust-Crate / Rust-Implementierung | Crate-Status |
+|---|---|---|---|
+| `pyparsing` (BNF-Parser) | `calculator/processor.py`, `calculator/fourFn.py` | **Eigener Pratt-Parser** in `crates/logprep-core/src/processor/calculator/expression.rs` (kein neues Crate, um Dependency-Footprint klein zu halten) | in Rust zu schreiben |
+| `msgspec.json.Decoder` | `decoder/decoders.py` (`parse_json`, `parse_docker`) | `serde_json` (bereits als `serde_json.workspace = "1"` in `Cargo.toml`) | ✅ bereits vorhanden |
+| `base64`, `binascii` | `decoder/decoders.py` (`parse_base64`) | `base64 = "0.22"` Crate | ✅ hinzufügen |
+| Python `re` | `dissector/rule.py`, `replacer/rule.py`, `decoder/decoders.py` (alle Regex-Operationen) | `regex` Crate (bereits als `regex.workspace = "1"` in `Cargo.toml`) | ✅ bereits vorhanden |
+| `attrs` (`@define`, `validators`) | Alle `rule.py` der 9 Prozessoren | `serde::Deserialize` mit `#[serde(deny_unknown_fields)]` + pro-Feld-`#[serde(default = "...")]` | natives Rust-Pattern |
+| `dataclasses.dataclass` | `replacer/rule.py`, `dissector/rule.py` | Native Rust-Structs | nativ |
+| `functools.partial` | `decoder/decoders.py` (`partial(_parse, regexes=...)`) | Rust-Closures (`.map_err(...)`, `move |x| ...`) | nativ |
+| `functools.cached_property` | `calculator/processor.py` (BNF als Singleton) | `OnceCell` / `OnceLock` aus `std::sync` | nativ |
+| `logprep.util.decorators.timeout` | `calculator/processor.py` | `std::sync::mpsc::channel` + `std::thread::spawn` + `recv_timeout` | nativ |
+| `logprep.util.helper` (Python-Wrapper) | Alle `processor.py` | `field::value::*` (pure Rust, wiederverwendet) | bereits in Phase 1 migriert |
+| `logprep.processor.calculator.fourFn.BNF` | `calculator/processor.py` | Pratt-Parser in Rust (gleicher Funktionsumfang) | in Rust zu schreiben |
+
+**Verboten in Phase 4**:
+- `pyo3-asyncio`, `pyo3-asyncio`-basierte tokio-Integration (Phase 6)
+- Neue Python-Crates in `pyproject.toml` für Phase-4-Funktionalität
+- Jegliche `try: import msgspec; ...; except ImportError: ...`-Konstrukte (Leitprinzip 6)
+
+### Rust-Modulstruktur
+
+```
+crates/logprep-core/src/
+├── field/
+│   ├── mod.rs                # re-exportiert value::* und py::*
+│   ├── value.rs              # pure-Rust Operationen auf serde_json::Value  (NEU in 4a)
+│   └── py.rs                 # PyO3-Wrapper (alter field.rs-Inhalt)          (UMZUG in 4a)
+├── processor/                # (NEU)
+│   ├── mod.rs                # ProcessorCore-Trait, RuleSpec-Trait, Registration
+│   ├── rule_spec.rs          # gemeinsame Rule-Validierung, SplitFields
+│   ├── dropper.rs
+│   ├── deleter.rs
+│   ├── field_manager.rs      # inkl. Concatenator
+│   ├── string_splitter.rs
+│   ├── calculator.rs         # inkl. expression.rs (Pratt-Parser)
+│   ├── dissector.rs          # inkl. dissect_parser.rs
+│   ├── replacer.rs           # inkl. template.rs
+│   └── decoder.rs            # inkl. decoders.rs
+```
+
+### Datenmodell (Rust)
+
+Jeder Processor definiert drei Typen:
 
 ```rust
-#[pyclass]
-pub struct Dropper {
+// 1) Pure Rust Rule — keine PyO3, keine Python-Objekte
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DropperRule {
+    pub drop: Vec<String>,
+    #[serde(default = "default_drop_full")]
+    pub drop_full: bool,
+}
+
+// 2) Pure Rust Processor — nutzt field::value::* aus Phase 1
+pub struct DropperProcessor {
     name: String,
-    rules: Vec<Rule>,
+    rules: HashMap<u64, DropperRule>,
+    rule_tree: TreeInner,                  // Phase 3
+}
+
+impl DropperProcessor {
+    pub fn new(name: String) -> Self { ... }
+    pub fn add_rule(&mut self, rule_id: u64, filter: &FilterExpressionInner,
+                    raw: &serde_json::Map<String, Value>) -> Result<(), String> { ... }
+    pub fn process(&self, event: &mut Value) -> Result<(), String> {
+        for rule_id in self.rule_tree.get_matching_rules(event) {
+            let rule = &self.rules[&rule_id];
+            for dotted in &rule.drop {
+                crate::field::value::pop_dotted_field_value(event, dotted, rule.drop_full);
+            }
+        }
+        Ok(())
+    }
+}
+
+// 3) PyO3-Adapter — dünner Wrapper ohne Event-Logik
+#[pyclass]
+pub struct PyDropper {
+    inner: DropperProcessor,
 }
 
 #[pymethods]
-impl Dropper {
+impl PyDropper {
     #[new]
-    fn new(name: String, config: PyObject) -> PyResult<Self> { ... }
-
-    fn process(&self, py: Python, event: PyObject) -> PyResult<PyObject> {
-        // Rust-Logik komplett in Rust
+    fn new(name: String) -> Self {
+        Self { inner: DropperProcessor::new(name) }
     }
+
+    #[pyo3(signature = (rule_id, filter, rule_data))]
+    fn add_rule(&mut self, py: Python, rule_id: u64, filter: &Bound<'_, PyAny>,
+                rule_data: &Bound<'_, PyDict>) -> PyResult<()> {
+        let inner = FilterExpressionInner::from_py_object(filter)?;
+        let raw = pydict_to_map(rule_data)?;
+        let rule: DropperRule = serde_json::from_value(Value::Object(raw))
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        self.inner.add_rule(rule_id, &inner, &serde_json::from_value(Value::Object(raw)).unwrap())
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    fn process(&self, py: Python, event: &Bound<'_, PyDict>) -> PyResult<()> {
+        let mut value = pydict_to_json(event)?;
+        self.inner.process(&mut value).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        json_to_pydict(py, event, &value)
+    }
+
+    fn rule_count(&self) -> usize { self.inner.rules.len() }
 }
 ```
 
-### Python-Brücke
+### Python-Adapter (Soll) — exakte Form
 
 ```python
 # logprep/ng/processor/dropper/processor.py
-from logprep._rust.processor import Dropper
+from logprep._rust.processor import PyDropper as _RustDropper
+from logprep.ng.abc.processor import Processor
+from logprep.processor.dropper.rule import DropperRule
+from logprep.util.rule_loader import RuleLoader
+
+
+class Dropper(Processor):
+    """Drop log events. Logik vollständig in Rust (Phase 4)."""
+
+    rule_class = DropperRule
+
+    def __init__(self, name: str, configuration: "Processor.Config") -> None:
+        Processor.__init__(self, name, configuration, _rust_processor_factory=_RustDropper)
+        self.load_rules(rules_targets=self.config.rules)
+
+    def load_rules(self, rules_targets) -> None:
+        for rule in RuleLoader(rules_targets, self.name).rules:
+            self._rust.add_rule(
+                rule_id=int(rule.id, 16) if isinstance(rule.id, str) else rule.id,
+                filter=rule.filter,
+                rule_data=rule._config.asdict(),
+            )
+            self._rule_id_to_rule[rule.id] = rule
+
+    async def process(self, event):
+        self._event = event
+        self._rust.process(event.data)
+        for rule in self._rule_id_to_rule.values():
+            rule.metrics.number_of_processed_events += 1
+        return self._event
 ```
 
-### Verifizierung
+> **Negativkatalog**: Diese Imports/Operationen sind im Python-Adapter **verboten**:
+> - `from logprep.util.helper import pop_dotted_field_value, add_fields_to, get_dotted_field_value, …`
+> - `from pyparsing import …`
+> - `import msgspec` (zu Decoder-Zwecken — Decoder ist in Rust)
+> - `import re` (für Rule-Logik — Regex ist in Rust)
+> - `import base64` (Decoder ist in Rust)
+> - `self._rule_tree.get_matching_rules(...)`
+> - `for rule in matching_rules: self._apply_rules(event, rule)`
+> - `if/elif`-Logik auf Event-Feldern in `process()`
+>
+> Die einzigen `for`-Schleifen in Python sind: (a) `for rule in RuleLoader(…).rules` in `load_rules` und (b) `for rule in self._rule_id_to_rule.values()` für Metriken. Beide sind außerhalb des Event-Verarbeitungs-Pfads.
+
+### Schritte
+
+- **4a — Pure-Rust-Helper-Modul `field::value` (Refactor Phase 1)**: Aufteilung von `crates/logprep-core/src/field.rs` in:
+  - `field/value.rs` (neu): pure-Rust-Implementierungen aller Phase-1-Funktionen operieren auf `&mut serde_json::Value` / `&serde_json::Value`. Funktions-Signaturen:
+    ```rust
+    pub fn get_dotted_field_value<'a>(event: &'a Value, key: &[String]) -> Option<&'a Value>;
+    pub fn get_dotted_field_value_with_missing<'a>(event: &'a Value, key: &[String]) -> Result<&'a Value, MissingFieldError>;
+    pub fn get_dotted_field_values<'a>(event: &'a Value, keys: &[Vec<String>], on_missing: OnMissing) -> Vec<Option<&'a Value>>;
+    pub fn has_dotted_field(event: &Value, key: &[String], allow_none: bool) -> bool;
+    pub fn pop_dotted_field_value(event: &mut Value, key: &[String], drop_empty: bool) -> Option<Value>;
+    pub fn add_field_to(event: &mut Value, field_name: &[String], content: Value,
+                        merge_with_target: bool, overwrite_target: bool) -> Result<(), FieldExistsError>;
+    pub fn add_fields_to(event: &mut Value, fields: BTreeMap<Vec<String>, Value>,
+                         merge_with_target: bool, overwrite_target: bool) -> Result<Vec<String>, Vec<String>>;
+    pub fn get_source_fields_dict<'a>(event: &'a Value, source_fields: &[Vec<String>]) -> BTreeMap<String, Option<&'a Value>>;
+    pub fn resolve_template(template: &str, source_field_dict: &BTreeMap<String, Value>) -> String;
+    pub fn append_as_list<'a>(event: &'a mut Value, fields: BTreeMap<Vec<String>, Value>) -> Result<(), FieldExistsError>;
+    pub fn add_and_overwrite(event: &mut Value, fields: BTreeMap<String, Value>) -> Result<(), FieldExistsError>;
+    pub fn append(event: &mut Value, field_name: &[String], value: Value) -> Result<(), FieldExistsError>;
+    pub fn get_dotted_field_list(dotted: &str) -> Vec<String>;
+    pub fn field_list_to_dotted_field(list: &[String]) -> String;
+    pub fn join_dotted_fields(list: &[String]) -> String;
+    ```
+  - `field/py.rs`: bestehende PyO3-Funktionen aus `field.rs` werden zu **1–3-Zeilen-Wrappern** reduziert, die `pydict_to_json` → `value::*` → `json_to_pydict` aufrufen. Public-API in Python (`from logprep._rust import pop_dotted_field_value`) bleibt binärkompatibel.
+  - `field/mod.rs`: `pub mod value; pub mod py;` plus `pub use value::*;` für crate-internen Zugriff.
+  - 30+ Rust-Unit-Tests, die die Byte-Äquivalenz der pure-Rust-Versionen zu den Python-Versionen verifizieren (Behavior-Preservation-Tests, abgeleitet aus den Phase-1-Tests). **Keine** Tests, die die PyO3-Wrapper direkt prüfen — sie sind jetzt trivial.
+  - Cargo.toml: `serde_json` ist bereits vorhanden; **kein neues Crate nötig** für 4a.
+
+- **4b — ProcessorCore-Trait + gemeinsame Typen (Pure Rust Core)**: In `crates/logprep-core/src/processor/mod.rs`:
+  ```rust
+  pub trait ProcessorCore: Send + Sync {
+      fn name(&self) -> &str;
+      fn add_rule(&mut self, rule_id: u64, filter: &FilterExpressionInner,
+                  raw: &serde_json::Map<String, Value>) -> Result<(), String>;
+      fn process(&self, event: &mut Value) -> Result<(), String>;
+  }
+  pub trait RuleSpec: Sized + serde::de::DeserializeOwned + Clone + Send + Sync + std::fmt::Debug {
+      const TYPE_NAME: &'static str;
+      fn validate(raw: &serde_json::Map<String, Value>) -> Result<(), String>;
+  }
+  pub struct RuleSlot<R: RuleSpec> {
+      pub spec: R,
+      pub filter_segments: Vec<FilterExpressionInner>,
+  }
+  pub struct RuleRegistry<R: RuleSpec> {
+      pub rules: HashMap<u64, RuleSlot<R>>,
+      pub tree: TreeInner,
+  }
+  impl<R: RuleSpec> RuleRegistry<R> {
+      pub fn add(&mut self, rule_id: u64, filter: &FilterExpressionInner,
+                 raw: &serde_json::Map<String, Value>,
+                 priority: &HashMap<String, String>, tags: &HashMap<String, String>) -> Result<(), String>;
+      pub fn process(&self, event: &mut Value) -> Result<(), String>;  // iteriert tree.matches + wendet spec.apply auf
+  }
+  ```
+  Gemeinsame Helfer:
+  - `SplitFields::split(raw: &Map) -> Vec<Vec<String>>` — splittet Dotted-Field-Strings einmalig in `Vec<String>` beim `add_rule`. Verwendet `field::value::get_dotted_field_list`.
+  - `validate_required_keys(raw, &["drop"])` — prüft Pflichtschlüssel (ersetzt `attrs`-Validatoren).
+  - `processor::register(m)` exportiert alle PyO3-Klassen unter `logprep._rust.processor.*`.
+  - 10+ Rust-Unit-Tests für Trait + Helper.
+
+- **4c — Dropper in Rust (Referenz-Implementierung)**: `crates/logprep-core/src/processor/dropper.rs`:
+  ```rust
+  #[derive(Debug, Clone, serde::Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub struct DropperRuleSpec {
+      pub drop: Vec<String>,
+      #[serde(default = "default_true")]
+      pub drop_full: bool,
+  }
+  impl RuleSpec for DropperRuleSpec {
+      const TYPE_NAME: &'static str = "dropper";
+      fn validate(_raw: &Map) -> Result<(), String> { Ok(()) }
+  }
+  impl DropperRuleSpec {
+      pub fn apply(&self, event: &mut Value) {
+          for dotted in &self.drop {
+              let key = crate::field::value::get_dotted_field_list(dotted);
+              crate::field::value::pop_dotted_field_value(event, &key, self.drop_full);
+          }
+      }
+  }
+  // ... PyDropper wie im Datenmodell-Abschnitt ...
+  ```
+  PyO3-Adapter `PyDropper` mit `add_rule(rule_id, filter, rule_data)` und `process(event_dict)`. 30+ Rust-Unit-Tests inkl. Edge-Cases (escaped Dots, leere Dicts, `drop_full=false`, `drop=[]`). Python `logprep/ng/processor/dropper/processor.py` wird auf den 5-Zeilen-Adapter reduziert. Bestehende Dropper-Tests müssen ohne Änderung grün sein.
+
+- **4d — Deleter in Rust**: `DeleterRuleSpec { delete: bool }`. `apply`: wenn `delete`, `*event = Value::Object(Default::default())`. 20+ Rust-Unit-Tests.
+
+- **4e — FieldManager + Concatenator in Rust**: `FieldManagerRuleSpec { source_fields: Vec<String>, target_field: String, mapping: BTreeMap<String, String>, delete_source_fields: bool, overwrite_target: bool, merge_with_target: bool, ignore_missing_fields: bool }`. `apply` verwendet ausschließlich `field::value::{get_dotted_field_value, pop_dotted_field_value, add_field_to, add_field_to_silent_fail}` (Phase-1-Wiederverwendung). `ConcatenatorRuleSpec` erbt von `FieldManagerRuleSpec` und fügt `separator: String` hinzu; `apply` ruft `field_manager.apply` auf und joint die String-Werte mit `separator`. 50+ Rust-Unit-Tests.
+
+- **4f — StringSplitter + Replacer + Decoder in Rust**:
+  - `StringSplitterRuleSpec { source_fields, target_field, delimiter, drop_empty }` — `str::split` direkt in Rust.
+  - `ReplacerRuleSpec { mapping: BTreeMap<source, target>, templates: Vec<ReplacementTemplate>, ignore_missing_fields, overwrite_target }` — Replacer-Template-Logik (1:1 aus `replacer/rule.py`) in Rust portiert. Regex via `regex` Crate (Phase 1).
+  - `DecoderRuleSpec { source_fields, target_field, source_format: DecoderFormat, ignore_missing_fields, overwrite_target, merge_with_target }` mit `DecoderFormat` als Rust-Enum (`Json`, `Base64`, `Clf`, `Nginx`, `SyslogRfc3164`, `SyslogRfc3164Local`, `SyslogRfc5424`, `Logfmt`, `Cri`, `Docker`, `Decolorize`). Implementierung als `match` über `source_format`. JSON via `serde_json` (Phase 1). Base64 via `base64` Crate. Regex via `regex` Crate. **Keine** `msgspec`-, `binascii`- oder Python-`re`-Importe.
+  - 60+ Rust-Unit-Tests gesamt.
+
+- **4g — Calculator in Rust (inkl. eigenem Pratt-Parser)**:
+  - `crates/logprep-core/src/processor/calculator/expression.rs`: Pratt-Parser mit gleicher Semantik wie `calculator/fourFn.py` (Operatoren `+ - * / ^ > < >= <= == !=`, Funktionen `sin cos tan exp abs trunc from_hex round sgn multiply hypot all`, Konstanten `PI E`, unäres Minus). Ausgabe ist ein `Expr`-AST (Rust-Enum). Evaluator traversiert den AST. **Kein** `pyparsing`.
+  - `CalculatorRuleSpec { source_fields, target_field, calc: String, timeout: f64, ignore_missing_fields, overwrite_target, merge_with_target }`.
+  - `apply`: (1) `get_source_fields_dict` (Phase 1), (2) `resolve_template(calc, source_field_dict)` (Phase 1), (3) `parse_expression(calc_with_values) -> Expr`, (4) `evaluate_with_timeout(expr, timeout)` via `std::sync::mpsc::channel` + `std::thread::spawn` + `recv_timeout` (ersetzt `@timeout`-Decorator), (5) `add_field_to(target_field, result)` (Phase 1).
+  - 40+ Rust-Unit-Tests. **Insbesondere**: Whitespace-Toleranz, Operator-Precedence (`2^3^2 == 2^(3^2)`), unäres Minus, `from_hex`, `round`, `sgn`, `all`, Parse-Fehler-Mapping auf `ProcessingWarning`.
+
+- **4h — Dissector in Rust**:
+  - `crates/logprep-core/src/processor/dissector/dissect_parser.rs`: Parser für Dissect-Pattern (Sequenz von `%{key}`, `%{&key}`, `%{?key}`, `%{}`, Separatoren) — übersetzt in `Vec<DissectAction>`. Regex-Spezialfälle (z. B. `%{integer}`, `%{data}`) via `regex` Crate.
+  - `DissectorRuleSpec { actions_by_source_field, convert_actions: Vec<(target, Converter)>, ignore_missing_fields }` mit `Converter` als Rust-Enum (`Int`, `Float`, `String`, `Bytes`, `Ip`).
+  - `apply` führt die Aktionen via `field::value::*` aus (Phase 1). Convert-Actions nutzen `str::parse::<i64>()` / `::parse::<f64>()`.
+  - 40+ Rust-Unit-Tests.
+
+- **4i — Aufräumen + Legacy-Path-Validierung + Negativkatalog-Check**:
+  1. `logprep/processor/<name>/processor.py` und `rule.py` werden zu **Re-Exports** (für nicht-ng-Pfad), die `logprep.ng.processor.<name>.processor` importieren. Damit existiert nur noch **eine** Logik-Quelle (Rust) und der nicht-ng-Pfad ist nur ein dünner Python-Alias.
+  2. `logprep.registry.Registry._ng_mapping` zeigt weiterhin auf `logprep.ng.processor.<name>.processor.<Name>` — keine Änderung.
+  3. `tests/unit/processor/<name>/test_<name>.py` läuft **ohne Änderung** grün — Test-Suite ist die Wahrheit.
+  4. **Negativkatalog-Check** (CI-Skript `scripts/check_phase4_adapter_thinness.py`):
+     ```bash
+     for f in logprep/ng/processor/*/processor.py; do
+       grep -E 'pop_dotted_field_value|add_fields_to|get_dotted_field_value|pyparsing|msgspec|^import re|^import base64|_rule_tree\.get_matching_rules' "$f" \
+         && { echo "VIOLATION in $f"; exit 1; }
+     done
+     ```
+     Exit-Code ≠ 0 bricht CI.
+  5. `benchmarks/results/phase4_<name>_ng_*.txt` wird mit `benchmarks/run_phase_benchmark.py` aufgenommen; Vergleich gegen `phase3_ng_*.txt` darf keine Regression > 5 % zeigen.
+  6. `CHANGELOG.md`: Eintrag in „## Upcoming Changes / ### Improvements" pro Processor („`<name>`: migrate core logic + rule spec to Rust via PyO3, replace `<external_lib>` with `<rust_crate>`").
+
+### Verifizierung pro Subphase
 
 ```bash
+# Build + Rust-Unit-Tests
+cargo build --release
 cargo test -p logprep-core
-uv run pytest tests/unit/processor/ -vvv
+
+# Targeted Python-Tests pro Processor (müssen ohne Änderung grün sein)
+uv run pytest tests/unit/processor/dropper/ -vvv
+uv run pytest tests/unit/processor/deleter/ -vvv
+uv run pytest tests/unit/processor/field_manager/ -vvv
+uv run pytest tests/unit/processor/concatenator/ -vvv
+uv run pytest tests/unit/processor/string_splitter/ -vvv
+uv run pytest tests/unit/processor/calculator/ -vvv
+uv run pytest tests/unit/processor/dissector/ -vvv
+uv run pytest tests/unit/processor/replacer/ -vvv
+uv run pytest tests/unit/processor/decoder/ -vvv
+
+# Negativkatalog: Python-Adapter enthält keine Event-Logik
+uv run python scripts/check_phase4_adapter_thinness.py
+
+# Coverage
+uv run pytest tests/unit/processor/ --cov=logprep --cov-report=xml -vvv
+
+# Qualität
+uv run black --check --diff --config ./pyproject.toml .
+uv run pylint $(git diff --name-only --diff-filter=ACMR main...HEAD -- '*.py' '*.rs')
+uv run mypy $(git diff --name-only --diff-filter=ACMR main...HEAD -- '*.py')
+
+# Extern-Lib-Check: keine neuen Python-Deps, keine msgspec/pyparsing/re/base64 in ng/
+uv run python scripts/check_no_external_libs_in_ng.py
+
+# Benchmark
+uv run python ./benchmarks/run_phase_benchmark.py \
+    --phase phase4_<name> --processors <name> \
+    --output benchmarks/results/phase4_<name>_ng_$(date +%Y%m%d_%H%M%S).txt
 ```
 
-### Performance-Test
+### Akzeptanzkriterien (Phase 4 abgeschlossen)
 
-```bash
-uv run python ./benchmarks/benchmark_processors.py --baseline benchmarks/phase3.json \
-  --output benchmarks/phase4.json
-```
+- [ ] Alle 9 priorisierten Prozessoren (dropper, deleter, field_manager, concatenator, string_splitter, calculator, dissector, replacer, decoder) sind in `crates/logprep-core/src/processor/<name>.rs` implementiert.
+- [ ] `field::value` (Pure-Rust-Versionen der Phase-1-Helper) ist in `crates/logprep-core/src/field/value.rs` vorhanden; `field::py` ist dünner Wrapper.
+- [ ] **Kein** `logprep/ng/processor/<name>/processor.py` importiert `pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, `pyparsing`, `msgspec`, `re`, `base64` oder ruft `_rule_tree.get_matching_rules` auf (verifiziert via `scripts/check_phase4_adapter_thinness.py`).
+- [ ] **Keine** `for`-Schleife über `event.data`-Keys, `if`-Verzweigungen auf Event-Feldern, oder Event-mutierende Operationen in `process()` der Python-Adapter.
+- [ ] Externe Python-Bibliotheken ersetzt: `pyparsing` → eigener Pratt-Parser, `msgspec` → `serde_json`, Python-`re` → `regex` Crate, `base64` → `base64` Crate, `attrs` → `serde::Deserialize`.
+- [ ] Phase-1-Helper werden in jeder Processor-Implementierung über `crate::field::value::*` aufgerufen (kein Reimplementieren).
+- [ ] Bestehende Unit-Tests aller 9 Prozessoren laufen ohne Modifikation grün.
+- [ ] Rust-Unit-Tests pro Processor: ≥ 20 (dropper, deleter), ≥ 40 (field_manager, calculator, dissector, replacer, decoder), ≥ 50 (concatenator, string_splitter). Plus ≥ 30 für `field::value`.
+- [ ] Performance: kein Prozessor zeigt > 5 % Regression ggü. Phase-3-Baseline; mindestens die field_manager-/dropper-Klasse zeigen ≥ 10 % Speedup.
+- [ ] `pre-commit run --all-files` grün, `mypy`/`pylint`/`black` clean, `uv lock --check` ok, neue CI-Jobs grün.
+- [ ] `CHANGELOG.md` enthält Eintrag pro migriertem Prozessor inkl. Crate-Mapping.
+
+### Risiken & Gegenmaßnahmen
+
+| Risiko | Gegenmaßnahme |
+|---|---|
+| `field::value` muss bytegenau zum Python-Verhalten sein (Merge-Semantik, Drop-Empty-Rekursion, Dotted-Field-Slicing) | Behavior-Preservation-Tests in 4a: pro Funktion ≥ 5 Tests mit Vorher-/Nachher-Vergleich gegen `helper.py` (vor Refactor). `scripts/compare_helpers.py` läuft beide Versionen auf 1000+ zufälligen Events |
+| `pyparsing` → eigener Pratt-Parser kann semantische Unterschiede haben (Whitespace, Operator-Precedence, unäres Minus) | Calculator-Tests 1:1 nach Rust spiegeln, jeden `pyparsing.ParseException`-Test in einen `Expr::Err`-Test umwandeln. Spezielle Tests für rechtsassoziatives `^`, chained `==`, `from_hex` mit Hex-Prefix |
+| Python-`re` und Rust-`regex` haben subtile Unterschiede (z. B. Unicode-Word-Boundaries, POSIX-vs-ECMAScript) | In 4a Inventur aller in Python-`re`-Verwendungen genutzten Patterns; Rust-`regex` standardmäßig ECMAScript-Flag, das in 99 % der Fälle passt. Explizite Tests für `\b` und Unicode-Klassen |
+| `msgspec` JSON-Decoder ist strikter als `serde_json` (z. B. `NaN`/`Infinity` als ungültig) | In 4f: Tests mit denselben Edge-Cases wie die bestehenden Decoder-Tests. Bei Verhaltensunterschied Mapping auf `DecoderError` |
+| `attrs`-Validierung ist subtiler als `serde::Deserialize` (z. B. `deep_iterable` über Dicts, bedingte Defaults) | Pro Processor eine vollständige Liste der Edge-Cases (z. B. `drop: []`, `drop_full: None`, `source_fields: None`) als Rust-Unit-Tests, abgeleitet aus den bestehenden Python-Tests |
+| `timeout`-Decorator (Python) via Thread+Signal vs. `std::sync::mpsc` (Rust) | 4g: Tests mit `timeout=0.001` (sehr kurz) verifizieren, dass Timeout-Fehler als `ProcessingWarning` ankommen, nicht als Panic. `std::thread::spawn` + `recv_timeout` ist die Standard-Idiom in Rust |
+| Round-Trip `dict → serde_json::Value → dict` pro Event | Phase 1 hat den Round-Trip bereits optimiert; Phase 4 nutzt `serde_json::Value` direkt als Event-Container. PyO3 nutzt `Bound<PyDict>::from_owned`/`into_owned` statt `pythonize`-Deepcopy. Benchmark in 4a misst Overhead |
+| Metriken werden in Python via `rule.metrics.number_of_processed_events += 1` aktualisiert; bei Rust-`process` weiß Rust nichts vom Python-`Rule` | (a) Python-Adapter iteriert nach `rust.process()` einmal über die geladenen Rule-IDs (`O(n_rules)`, vernachlässigbar ggü. Event-Verarbeitung) — Default-Variante. (b) Optional: Rust-Processor sammelt `Vec<u64>` der getroffenen Rule-IDs und Python-Adapter nutzt diese — vermeidet Iteration über alle Rules |
 
 ---
 
