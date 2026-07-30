@@ -61,7 +61,12 @@ pub fn get_dotted_field_list(dotted_field: &str) -> Vec<String> {
         match c {
             '.' => result.push(std::mem::take(&mut char_buffer)),
             '\\' => match chars.next() {
-                Some(next) => char_buffer.push(next),
+                Some('.') => char_buffer.push('.'),
+                Some('\\') => char_buffer.push('\\'),
+                Some(next) => {
+                    char_buffer.push('\\');
+                    char_buffer.push(next);
+                }
                 None => char_buffer.push('\\'),
             },
             _ => char_buffer.push(c),
