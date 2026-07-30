@@ -42,7 +42,7 @@ test_cases = [
     ),
     pytest.param(
         {
-            "filter": 'value\\.nl: "\n" AND value\\.tab: "\t" AND value\\.backslash: "\\"',
+            "filter": 'value\\.nl: "\n" AND value\\.tab: "\t" AND value\\.backslash: "\\\\"',
             "requester": {"url": "${url}/${file}", "method": "GET"},
         },
         {
