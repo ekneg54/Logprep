@@ -18,6 +18,7 @@ This file tracks throughput benchmarks across migration phases to detect regress
 |-------|--------|-------------------|-----------------|------------------|--------------|--------------|---------|-----------------|------------|
 | 0 | `34ae4fce` (v20.0.0) | 3,517.89 | 3,563.55 | 3,517.89 | 3,322.16 | 3,667.95 | 177.36 | 316,611 | — (baseline) |
 | 1 | `23e0623d` (HEAD) | 3,344.49 | 3,336.59 | 3,344.49 | 3,334.43 | 3,362.46 | 15.60 | 301,007 | -4.93% |
+| 2 | `f69ca1a0` (HEAD) | 3,355.57 | 3,336.72 | 3,355.57 | 3,336.63 | 3,393.36 | 32.73 | 302,002 | -4.61% |
 
 ## Detailed Per-Run Results
 
@@ -37,9 +38,18 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 2 | 30.000 | 400,000 | 100,098 | 3,336.59 |
 | 3 | 30.000 | 400,000 | 100,033 | 3,334.43 |
 
+### Phase 2 — Rust filter parser + expression refactor (`f69ca1a0`)
+
+| Run | Window (s) | Generated | Processed | Throughput (docs/s) |
+|-----|------------|-----------|-----------|---------------------|
+| 1 | 30.000 | 400,000 | 100,099 | 3,336.63 |
+| 2 | 30.000 | 400,000 | 101,801 | 3,393.36 |
+| 3 | 30.000 | 400,000 | 100,102 | 3,336.72 |
+
 ## Assessment
 
 **PHASE 1 shows a -4.93% throughput regression** compared to the PHASE 0 baseline.
+**PHASE 2 shows a -4.61% throughput regression** compared to the PHASE 0 baseline, but is **+0.33% above Phase 1**.
 
 ### Key observations
 
