@@ -10,7 +10,7 @@ This file tracks throughput benchmarks across migration phases to detect regress
 - **Pipeline**: `examples/exampledata/config/benchmark_ng_pipeline.yml`
 - **Services**: kafka, opensearch
 - **Python**: 3.14.2
-- **Date**: 2026-07-28
+- **Date**: 2026-07-30
 
 ## Results Summary
 
@@ -19,6 +19,7 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 0 | `34ae4fce` (v20.0.0) | 3,517.89 | 3,563.55 | 3,517.89 | 3,322.16 | 3,667.95 | 177.36 | 316,611 | — (baseline) |
 | 1 | `23e0623d` (HEAD) | 3,344.49 | 3,336.59 | 3,344.49 | 3,334.43 | 3,362.46 | 15.60 | 301,007 | -4.93% |
 | 2 | `f69ca1a0` (HEAD) | 3,355.57 | 3,336.72 | 3,355.57 | 3,336.63 | 3,393.36 | 32.73 | 302,002 | -4.61% |
+| 3 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
 
 ## Detailed Per-Run Results
 
@@ -46,10 +47,19 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 2 | 30.000 | 400,000 | 101,801 | 3,393.36 |
 | 3 | 30.000 | 400,000 | 100,102 | 3,336.72 |
 
+### Phase 3 — Rust rule tree + rule parser (`<commit>`)
+
+| Run | Window (s) | Generated | Processed | Throughput (docs/s) |
+|-----|------------|-----------|-----------|---------------------|
+| 1 | TBD | TBD | TBD | TBD |
+| 2 | TBD | TBD | TBD | TBD |
+| 3 | TBD | TBD | TBD | TBD |
+
 ## Assessment
 
 **PHASE 1 shows a -4.93% throughput regression** compared to the PHASE 0 baseline.
 **PHASE 2 shows a -4.61% throughput regression** compared to the PHASE 0 baseline, but is **+0.33% above Phase 1**.
+**PHASE 3 is pending** — requires benchmark run with Docker (Kafka + OpenSearch).
 
 ### Key observations
 
@@ -67,11 +77,11 @@ This file tracks throughput benchmarks across migration phases to detect regress
 ## How to Add Future Phases
 
 ```bash
-# Run benchmark for the current phase (e.g., phase 2)
-uv run python benchmarks/run_phase_benchmark.py --phase 2 --runs 30 30 30
+# Run benchmark for phase 3 (requires Docker)
+uv run python benchmarks/run_phase_benchmark.py --phase 3 --runs 30 30 30
 
-# Compare against baseline
-uv run python benchmarks/compare_phases.py --phase-baseline 0 --phase-current 2
+# Compare against previous phase
+uv run python benchmarks/compare_phases.py --phase-baseline 2 --phase-current 3
 
 # List all recorded phases
 uv run python benchmarks/compare_phases.py --list

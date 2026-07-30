@@ -1,27 +1,27 @@
 compose_opensearch-data
-2026-07-30 08:19:16 1517411 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:19:16 1517411 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:19:16 1517411 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:19:16 1517411 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:19:17 1517411 None root       INFO    : Log level set to 'WARNING'
-2026-07-30 08:19:17 1517411 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
-2026-07-30 08:19:17 1517411 root Runner     INFO    : Startup complete
+2026-07-30 14:34:45 2036022 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:34:45 2036022 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:34:45 2036022 root Runner     INFO    : Startup complete
 
 === BENCHMARK CONFIGURATION ===
-timestamp (local)             : 2026-07-30T08:18:43.489044
-timestamp (UTC)               : 2026-07-30T06:18:43.489048+00:00
+timestamp (local)             : 2026-07-30T14:34:13.341968
+timestamp (UTC)               : 2026-07-30T12:34:13.341972+00:00
 python version                : 3.14.2
 ----------------------------------------
 bootstrap_servers             : 127.0.0.1:9092
@@ -44,132 +44,136 @@ sleep_after_logprep_start_s   : 10
 ================================
 
 ----- Run Round 1: 30 seconds -----
-2026-07-30 08:19:55 1517411 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:19:55 1517411 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:19:55 1517411 Task-281 KafkaInput WARNING : VOP-PipelineNone-pid1517411-227c732d-95ee-450d-8623-cd04b308f158 to be revoked from topic: consumer | partition 0
-2026-07-30 08:19:55 1517411 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+2026-07-30 14:35:23 2036022 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:35:23 2036022 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:35:25 2036022 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2036022-809bf85c-9802-4dad-a9dd-b5c8bfd02327 to be revoked from topic: consumer | partition 0
+2026-07-30 14:35:25 2036022 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
 compose_opensearch-data
-2026-07-30 08:20:29 1527303 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:20:29 1527303 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:20:29 1527303 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:20:29 1527303 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:20:29 1527303 None root       INFO    : Log level set to 'WARNING'
-2026-07-30 08:20:29 1527303 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
-2026-07-30 08:20:29 1527303 root Runner     INFO    : Startup complete
+2026-07-30 14:35:58 2045929 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:35:58 2045929 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:35:58 2045929 root Runner     INFO    : Startup complete
 --- RESULT ---
 run_seconds:            30
 events generated:       400_000
-generation time:        3.568 s
+generation time:        3.497 s
 measurement window:     30.000 s
-processed (OpenSearch): 100_099
-throughput:             3,336.63 docs/s
+processed (OpenSearch): 65_034
+throughput:             2,167.80 docs/s
 --------------
 
 ----- Run Round 2: 30 seconds -----
-2026-07-30 08:21:06 1527303 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:21:07 1527303 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:21:07 1527303 Task-278 KafkaInput WARNING : VOP-PipelineNone-pid1527303-c38bcbfb-b3c5-46b9-80e2-1fd642a96d2d to be revoked from topic: consumer | partition 0
-2026-07-30 08:21:07 1527303 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+2026-07-30 14:36:35 2045929 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:36:36 2045929 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:36:37 2045929 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2045929-59e91770-3b8e-4e5d-9b6b-138739ad7f68 to be revoked from topic: consumer | partition 0
+2026-07-30 14:36:37 2045929 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
 compose_opensearch-data
-2026-07-30 08:21:41 1537140 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:21:41 1537140 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:21:41 1537140 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:21:41 1537140 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
 https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
   warnings.warn(
 
-2026-07-30 08:21:41 1537140 None root       INFO    : Log level set to 'WARNING'
-2026-07-30 08:21:41 1537140 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
-2026-07-30 08:21:41 1537140 root Runner     INFO    : Startup complete
+2026-07-30 14:37:11 2056695 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:37:11 2056695 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:37:11 2056695 root Runner     INFO    : Startup complete
 --- RESULT ---
 run_seconds:            30
 events generated:       400_000
-generation time:        3.557 s
+generation time:        3.408 s
 measurement window:     30.000 s
-processed (OpenSearch): 101_801
-throughput:             3,393.36 docs/s
+processed (OpenSearch): 65_033
+throughput:             2,167.76 docs/s
 --------------
 
 ----- Run Round 3: 30 seconds -----
-2026-07-30 08:22:19 1537140 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:22:19 1537140 None Runner     INFO    : Setting stop signal for the runner
-2026-07-30 08:22:19 1537140 Task-281 KafkaInput WARNING : VOP-PipelineNone-pid1537140-af38786c-742c-4269-92d7-62882648cb8b to be revoked from topic: consumer | partition 0
-2026-07-30 08:22:19 1537140 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+2026-07-30 14:37:49 2056695 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:37:49 2056695 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:37:50 2056695 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2056695-8050c71a-b5cd-4a8e-bf75-2d4472a6a419 to be revoked from topic: consumer | partition 0
+2026-07-30 14:37:50 2056695 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
 --- RESULT ---
 run_seconds:            30
 events generated:       400_000
-generation time:        3.626 s
+generation time:        3.163 s
 measurement window:     30.000 s
-processed (OpenSearch): 100_102
-throughput:             3,336.72 docs/s
+processed (OpenSearch): 65_051
+throughput:             2,168.36 docs/s
 --------------
 
 
 === FINAL BENCHMARK SUMMARY ===
 runs:                  3
 total runtime:         90.000 s
-total processed:       302_002
+total processed:       195_118
 
-throughput (weighted): 3,355.57 docs/s
-throughput (median):   3,336.72 docs/s
-throughput (average):  3,355.57 docs/s
-throughput (min/max):  3,336.63 / 3,393.36 docs/s
-throughput (std dev):  32.73 docs/s
+throughput (weighted): 2,167.97 docs/s
+throughput (median):   2,167.80 docs/s
+throughput (average):  2,167.97 docs/s
+throughput (min/max):  2,167.76 / 2,168.36 docs/s
+throughput (std dev):  0.34 docs/s
 ================================
 
- Container kafkaexporter Stopping
- Container opensearch Stopping
- Container kafkaexporter Stopped
- Container kafkaexporter Removing
- Container kafkaexporter Removed
- Container kafka Stopping
- Container opensearch Stopped
- Container opensearch Removing
- Container opensearch Removed
- Container kafka Stopped
- Container kafka Removing
- Container kafka Removed
- Network compose_prometheus Removing
- Network compose_opensearch Removing
- Network compose_kafka Removing
- Network compose_opensearch Removed
- Network compose_prometheus Removed
- Network compose_kafka Removed
- Network compose_opensearch Creating
- Network compose_opensearch Created
- Network compose_kafka Creating
- Network compose_kafka Created
- Volume compose_opensearch-data Creating
- Volume compose_opensearch-data Created
- Container kafka Creating
- Container opensearch Creating
- Container kafka Created
- Container opensearch Created
- Container opensearch Starting
- Container kafka Starting
- Container kafka Started
- Container opensearch Started
+ Container prometheus Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopping 
+ Container grafana Stopping 
+ Container grafana Stopped 
+ Container grafana Removing 
+ Container prometheus Stopped 
+ Container prometheus Removing 
+ Container grafana Removed 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container prometheus Removed 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_kafka Removing 
+ Network compose_prometheus Removing 
+ Network compose_opensearch Removing 
+ Network compose_opensearch Removed 
+ Network compose_prometheus Removed 
+ Network compose_kafka Removed 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container kafka Started 
+ Container opensearch Started 
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 DEBUG read_string_lit pos=28 c=Some('s')
@@ -349,32 +353,32 @@ DEBUG read_string_lit pos=68 c=Some('m')
 DEBUG read_string_lit pos=69 c=Some('o')
 DEBUG read_string_lit pos=70 c=Some('n')
 DEBUG read_string_lit pos=71 c=Some('"')
- Container opensearch Stopping
- Container kafka Stopping
- Container opensearch Stopped
- Container opensearch Removing
- Container opensearch Removed
- Container kafka Stopped
- Container kafka Removing
- Container kafka Removed
- Network compose_opensearch Removing
- Network compose_kafka Removing
- Network compose_kafka Removed
- Network compose_opensearch Removed
- Network compose_opensearch Creating
- Network compose_opensearch Created
- Network compose_kafka Creating
- Network compose_kafka Created
- Volume compose_opensearch-data Creating
- Volume compose_opensearch-data Created
- Container opensearch Creating
- Container kafka Creating
- Container kafka Created
- Container opensearch Created
- Container opensearch Starting
- Container kafka Starting
- Container kafka Started
- Container opensearch Started
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container kafka Creating 
+ Container opensearch Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container opensearch Started 
+ Container kafka Started 
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 DEBUG read_string_lit pos=28 c=Some('s')
@@ -554,32 +558,32 @@ DEBUG read_string_lit pos=68 c=Some('m')
 DEBUG read_string_lit pos=69 c=Some('o')
 DEBUG read_string_lit pos=70 c=Some('n')
 DEBUG read_string_lit pos=71 c=Some('"')
- Container opensearch Stopping
- Container kafka Stopping
- Container opensearch Stopped
- Container opensearch Removing
- Container opensearch Removed
- Container kafka Stopped
- Container kafka Removing
- Container kafka Removed
- Network compose_kafka Removing
- Network compose_opensearch Removing
- Network compose_opensearch Removed
- Network compose_kafka Removed
- Network compose_kafka Creating
- Network compose_kafka Created
- Network compose_opensearch Creating
- Network compose_opensearch Created
- Volume compose_opensearch-data Creating
- Volume compose_opensearch-data Created
- Container kafka Creating
- Container opensearch Creating
- Container kafka Created
- Container opensearch Created
- Container opensearch Starting
- Container kafka Starting
- Container opensearch Started
- Container kafka Started
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_kafka Removed 
+ Network compose_opensearch Removed 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container opensearch Starting 
+ Container kafka Starting 
+ Container opensearch Started 
+ Container kafka Started 
 No stopped containers
 setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
 DEBUG read_string_lit pos=28 c=Some('s')
@@ -759,15 +763,15 @@ DEBUG read_string_lit pos=68 c=Some('m')
 DEBUG read_string_lit pos=69 c=Some('o')
 DEBUG read_string_lit pos=70 c=Some('n')
 DEBUG read_string_lit pos=71 c=Some('"')
- Container opensearch Stopping
- Container kafka Stopping
- Container opensearch Stopped
- Container opensearch Removing
- Container opensearch Removed
- Container kafka Stopped
- Container kafka Removing
- Container kafka Removed
- Network compose_kafka Removing
- Network compose_opensearch Removing
- Network compose_kafka Removed
- Network compose_opensearch Removed
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 

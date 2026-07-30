@@ -4800,7 +4800,7 @@ uv run python benchmarks/compare_phases.py --phase-baseline 2 --phase-current 3
 # 3. Ergebnis in BENCHMARK_HISTORY.md eintragen
 ```
 
-**Erwarteter Impact**: 
+**Erwarteter Impact**:
 - **Rule-Matching**: Die DFS-Traversierung des RuleTree läuft komplett in Rust auf `serde_json::Value` — kein Python-Objekt-Overhead mehr für `Node.does_match()`. Jeder `child.does_match(event)`-Aufruf war vorher ein Python-Methodenaufruf, der `KeyDoesNotExistError` abfängt — jetzt ist es ein direkter Rust-Enum-Match.
 - **Rule-Parsing** (Startup): DeMorgan, DNF-Konvertierung, und Tagging laufen in Rust ohne GIL-Overhead. Relevant für Konfigurationen mit tausenden Rules.
 - **Datenkonvertierung**: Einmalig pro Event muss das Python-Dict in `serde_json::Value` konvertiert werden (beim Aufruf von `PyRuleTree::get_matching_rules`). Dies ist O(n) für n Felder und existiert bereits in Phase 2 für `FilterExpression.matches()`.

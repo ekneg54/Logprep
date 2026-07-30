@@ -270,8 +270,6 @@ impl FilterExpressionInner {
                     Value::Array(arr) => {
                         Ok(arr.iter().any(|v| v.as_str() == Some(expected.as_str())))
                     }
-                    Value::Number(n) => Ok(&n.to_string() == expected),
-                    Value::Bool(b) => Ok(&b.to_string() == expected),
                     _ => Ok(false),
                 }
             }
@@ -293,10 +291,10 @@ impl FilterExpressionInner {
                 let value = get_json_value(key, document)?;
                 match &value {
                     Value::Number(n) => {
-                        if let Some(i) = n.as_i64() {
+                        if n.is_f64() {
+                            Ok(false)
+                        } else if let Some(i) = n.as_i64() {
                             Ok(i == *expected)
-                        } else if let Some(f) = n.as_f64() {
-                            Ok(f as i64 == *expected)
                         } else {
                             Ok(false)
                         }
@@ -309,8 +307,12 @@ impl FilterExpressionInner {
                 let value = get_json_value(key, document)?;
                 match &value {
                     Value::Number(n) => {
-                        if let Some(f) = n.as_f64() {
-                            Ok((f - *expected).abs() < f64::EPSILON)
+                        if n.is_f64() {
+                            if let Some(f) = n.as_f64() {
+                                Ok((f - *expected).abs() < f64::EPSILON)
+                            } else {
+                                Ok(false)
+                            }
                         } else {
                             Ok(false)
                         }
@@ -492,6 +494,166 @@ impl FilterExpressionInner {
             Self::Exists { key } => format!("{}: *", dotted_key(key)),
             Self::Null { key } => format!("{}:null", dotted_key(key)),
         }
+    }
+}
+
+// ─── PyO3-gestützte Extraktionsmethoden ───
+
+impl FilterExpressionInner {
+    /// Extrahiert ein FilterExpressionInner aus einem PyFilterExpression oder
+    /// einem Python-Objekt mit `expression_type` und Attributen.
+    pub fn from_py_object(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(py_expr) = obj.extract::<PyFilterExpression>() {
+            return Ok(py_expr.inner.clone());
+        }
+        let expr_type: String = obj.getattr("expression_type")?.extract()?;
+        match expr_type.as_str() {
+            "Always" => {
+                let value: bool = obj.getattr("value")?.extract()?;
+                Ok(FilterExpressionInner::Always { value })
+            }
+            "Not" => {
+                let children_attr = obj.getattr("children")?;
+                let child_list = children_attr.downcast::<PyList>()?;
+                let child = Self::from_py_object(&child_list.get_item(0)?)?;
+                Ok(FilterExpressionInner::Not {
+                    child: Box::new(child),
+                })
+            }
+            "And" => {
+                let children = Self::extract_children(obj)?;
+                Ok(FilterExpressionInner::And { children })
+            }
+            "Or" => {
+                let children = Self::extract_children(obj)?;
+                Ok(FilterExpressionInner::Or { children })
+            }
+            "StringFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                Ok(FilterExpressionInner::String { key, expected })
+            }
+            "WildcardStringFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                let regex = build_wildcard_regex(&expected)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                Ok(FilterExpressionInner::Wildcard {
+                    key,
+                    expected,
+                    regex,
+                })
+            }
+            "SigmaFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                let regex = build_sigma_regex(&expected)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                Ok(FilterExpressionInner::Sigma {
+                    key,
+                    expected,
+                    regex,
+                })
+            }
+            "IntegerFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                let val: i64 = expected
+                    .parse()
+                    .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid integer: {}", expected)))?;
+                Ok(FilterExpressionInner::Integer {
+                    key,
+                    expected: val,
+                })
+            }
+            "FloatFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                let val: f64 = expected
+                    .parse()
+                    .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid float: {}", expected)))?;
+                Ok(FilterExpressionInner::Float {
+                    key,
+                    expected: val,
+                })
+            }
+            "IntegerRangeFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let lower: i64 = obj.getattr("lower")?.extract()?;
+                let upper: i64 = obj.getattr("upper")?.extract()?;
+                let include_lower: bool = obj.getattr("include_lower")?.extract()?;
+                let include_upper: bool = obj.getattr("include_upper")?.extract()?;
+                Ok(FilterExpressionInner::IntegerRange {
+                    key,
+                    lower,
+                    upper,
+                    incl_low: include_lower,
+                    incl_high: include_upper,
+                })
+            }
+            "FloatRangeFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let lower: f64 = obj.getattr("lower")?.extract()?;
+                let upper: f64 = obj.getattr("upper")?.extract()?;
+                let include_lower: bool = obj.getattr("include_lower")?.extract()?;
+                let include_upper: bool = obj.getattr("include_upper")?.extract()?;
+                Ok(FilterExpressionInner::FloatRange {
+                    key,
+                    lower,
+                    upper,
+                    incl_low: include_lower,
+                    incl_high: include_upper,
+                })
+            }
+            "StringRangeFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let lower: String = obj.getattr("lower")?.extract()?;
+                let upper: String = obj.getattr("upper")?.extract()?;
+                let include_lower: bool = obj.getattr("include_lower")?.extract()?;
+                let include_upper: bool = obj.getattr("include_upper")?.extract()?;
+                Ok(FilterExpressionInner::StringRange {
+                    key,
+                    lower,
+                    upper,
+                    incl_low: include_lower,
+                    incl_high: include_upper,
+                })
+            }
+            "RegExFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let raw: String = obj.getattr("expected_value")?.extract()?;
+                let normalized = normalize_regex(&raw);
+                let compiled = Regex::new(&normalized).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
+                })?;
+                Ok(FilterExpressionInner::Regex {
+                    key,
+                    pattern: compiled,
+                })
+            }
+            "Exists" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                Ok(FilterExpressionInner::Exists { key })
+            }
+            "Null" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                Ok(FilterExpressionInner::Null { key })
+            }
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown expression_type: {}",
+                expr_type
+            ))),
+        }
+    }
+
+    fn extract_children(obj: &Bound<'_, PyAny>) -> PyResult<Vec<FilterExpressionInner>> {
+        let children = obj.getattr("children")?;
+        let child_list = children.downcast::<PyList>()?;
+        let mut result = Vec::new();
+        for item in child_list.iter() {
+            result.push(Self::from_py_object(&item)?);
+        }
+        Ok(result)
     }
 }
 
@@ -697,7 +859,7 @@ pub fn normalize_regex(regex: &str) -> String {
 #[pyclass]
 #[derive(Clone)]
 pub struct PyFilterExpression {
-    pub(crate) inner: FilterExpressionInner,
+    pub inner: FilterExpressionInner,
 }
 
 #[pymethods]

@@ -46,6 +46,11 @@ fn is_word_char(c: char) -> bool {
         && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '|')
 }
 
+fn is_word_escape(c: char) -> bool {
+    c.is_ascii_whitespace()
+        || matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\\')
+}
+
 fn is_word_start(c: char) -> bool {
     !c.is_ascii_whitespace()
         && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '"')
@@ -90,7 +95,6 @@ impl Lexer {
         let mut value = String::new();
         loop {
             let c = self.advance();
-            eprintln!("DEBUG read_string_lit pos={} c={:?}", self.pos, c);
             match c {
                 Some('"') => return Ok(value),
                 Some('\\') => match self.advance() {
@@ -145,8 +149,10 @@ impl Lexer {
                 raw.push('\\');
                 if let Some(next) = self.advance() {
                     raw.push(next);
-                    value.push('\\');
-                    if next != '\\' {
+                    if is_word_escape(next) {
+                        value.push(next);
+                    } else {
+                        value.push('\\');
                         value.push(next);
                     }
                 }

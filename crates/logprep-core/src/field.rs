@@ -736,4 +736,3 @@ mod tests {
         assert_eq!(join_dotted_fields(vec!["x.y".into(), "z".into()]), "x.y.z");
     }
 }
-
