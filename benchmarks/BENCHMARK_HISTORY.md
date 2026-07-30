@@ -19,7 +19,8 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 0 | `34ae4fce` (v20.0.0) | 3,517.89 | 3,563.55 | 3,517.89 | 3,322.16 | 3,667.95 | 177.36 | 316,611 | — (baseline) |
 | 1 | `23e0623d` (HEAD) | 3,344.49 | 3,336.59 | 3,344.49 | 3,334.43 | 3,362.46 | 15.60 | 301,007 | -4.93% |
 | 2 | `f69ca1a0` (HEAD) | 3,355.57 | 3,336.72 | 3,355.57 | 3,336.63 | 3,393.36 | 32.73 | 302,002 | -4.61% |
-| 3 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| 3 | `ac604977` | 2,167.97 | 2,167.80 | 2,167.97 | 2,167.76 | 2,168.36 | 0.34 | 195,118 | -38.37% |
+| 3a | `ee5682a0` | 3,462.84 | 3,500.56 | 3,462.84 | 3,385.59 | 3,502.36 | 66.90 | 311,656 | -1.56% |
 
 ## Detailed Per-Run Results
 
@@ -47,19 +48,28 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 2 | 30.000 | 400,000 | 101,801 | 3,393.36 |
 | 3 | 30.000 | 400,000 | 100,102 | 3,336.72 |
 
-### Phase 3 — Rust rule tree + rule parser (`<commit>`)
+### Phase 3 — Rust rule tree + rule parser (`ac604977`)
 
 | Run | Window (s) | Generated | Processed | Throughput (docs/s) |
 |-----|------------|-----------|-----------|---------------------|
-| 1 | TBD | TBD | TBD | TBD |
-| 2 | TBD | TBD | TBD | TBD |
-| 3 | TBD | TBD | TBD | TBD |
+| 1 | 30.0 | 400,000 | 65,034 | 2,167.80 |
+| 2 | 30.0 | 400,000 | 65,033 | 2,167.76 |
+| 3 | 30.0 | 400,000 | 65,051 | 2,168.36 |
+
+### Phase 3a — Fixed `get_json_value` clone + cross-type matching (`ee5682a0`)
+
+| Run | Window (s) | Generated | Processed | Throughput (docs/s) |
+|-----|------------|-----------|-----------|---------------------|
+| 1 | 30.0 | 400,000 | 105,017 | 3,500.56 |
+| 2 | 30.0 | 400,000 | 101,568 | 3,385.59 |
+| 3 | 30.0 | 400,000 | 105,071 | 3,502.36 |
 
 ## Assessment
 
 **PHASE 1 shows a -4.93% throughput regression** compared to the PHASE 0 baseline.
 **PHASE 2 shows a -4.61% throughput regression** compared to the PHASE 0 baseline, but is **+0.33% above Phase 1**.
-**PHASE 3 is pending** — requires benchmark run with Docker (Kafka + OpenSearch).
+**PHASE 3 shows a -38.37% throughput regression** — the Rust rule tree introduced a major performance bug in `get_json_value` that cloned the entire value on every `matches()` call, plus lost cross-type matching (string/number/bool).
+**PHASE 3a recovers to -1.56%** — fixing the `get_json_value` clone (return `&Value` instead of `Value`) and restoring cross-type matching brings throughput from ~2,168 back to ~3,463 docs/s, within 1.6% of the Phase 0 baseline.
 
 ### Key observations
 

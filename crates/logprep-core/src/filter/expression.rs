@@ -265,18 +265,20 @@ impl FilterExpressionInner {
 
             Self::String { key, expected } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::String(s) => Ok(s == expected),
                     Value::Array(arr) => {
                         Ok(arr.iter().any(|v| v.as_str() == Some(expected.as_str())))
                     }
+                    Value::Number(n) => Ok(&n.to_string() == expected),
+                    Value::Bool(b) => Ok(&b.to_string() == expected),
                     _ => Ok(false),
                 }
             }
 
             Self::Wildcard { key, regex, .. } | Self::Sigma { key, regex, .. } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::String(s) => Ok(regex.is_match(s)),
                     Value::Array(arr) => {
                         Ok(arr
@@ -289,12 +291,12 @@ impl FilterExpressionInner {
 
             Self::Integer { key, expected } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::Number(n) => {
-                        if n.is_f64() {
-                            Ok(false)
-                        } else if let Some(i) = n.as_i64() {
+                        if let Some(i) = n.as_i64() {
                             Ok(i == *expected)
+                        } else if let Some(f) = n.as_f64() {
+                            Ok(f as i64 == *expected)
                         } else {
                             Ok(false)
                         }
@@ -305,14 +307,10 @@ impl FilterExpressionInner {
 
             Self::Float { key, expected } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::Number(n) => {
-                        if n.is_f64() {
-                            if let Some(f) = n.as_f64() {
-                                Ok((f - *expected).abs() < f64::EPSILON)
-                            } else {
-                                Ok(false)
-                            }
+                        if let Some(f) = n.as_f64() {
+                            Ok((f - *expected).abs() < f64::EPSILON)
                         } else {
                             Ok(false)
                         }
@@ -329,7 +327,7 @@ impl FilterExpressionInner {
                 incl_high,
             } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::Number(n) => {
                         if let Some(i) = n.as_i64() {
                             let lo_ok = if *incl_low { i >= *lower } else { i > *lower };
@@ -351,7 +349,7 @@ impl FilterExpressionInner {
                 incl_high,
             } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::Number(n) => {
                         if let Some(f) = n.as_f64() {
                             let lo_ok = if *incl_low { f >= *lower } else { f > *lower };
@@ -373,7 +371,7 @@ impl FilterExpressionInner {
                 incl_high,
             } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::String(s) => {
                         let lo_ok = if *incl_low {
                             s.as_str() >= lower.as_str()
@@ -393,7 +391,7 @@ impl FilterExpressionInner {
 
             Self::Regex { key, pattern } => {
                 let value = get_json_value(key, document)?;
-                match &value {
+                match value {
                     Value::String(s) => Ok(pattern.is_match(s)),
                     Value::Array(arr) => {
                         Ok(arr
@@ -660,7 +658,7 @@ impl FilterExpressionInner {
 // ─── Pure Rust Hilfsfunktionen ───
 
 /// Traversiert ein `serde_json::Value`-Dict entlang eines Key-Pfads.
-fn get_json_value(key: &[String], document: &Value) -> Result<Value, MatchError> {
+fn get_json_value<'a>(key: &[String], document: &'a Value) -> Result<&'a Value, MatchError> {
     if key.is_empty() {
         return Err(MatchError::KeyNotFound);
     }
@@ -673,7 +671,7 @@ fn get_json_value(key: &[String], document: &Value) -> Result<Value, MatchError>
             _ => return Err(MatchError::TypeMismatch),
         }
     }
-    Ok(current.clone())
+    Ok(current)
 }
 
 /// Prüft ob ein Pfad in einem serde_json::Value-Dict existiert.
@@ -1808,34 +1806,43 @@ mod tests {
     }
 
     #[test]
-    fn string_does_not_match_wrong_type() {
+    fn string_matches_number_by_string_representation() {
         let expr = FilterExpressionInner::String {
             key: vec!["field".into()],
             expected: "42".into(),
         };
         let doc = json!({"field": 42});
-        assert!(!expr.matches(&doc));
+        assert!(expr.matches(&doc));
     }
 
     #[test]
-    fn integer_does_not_match_float() {
+    fn string_matches_bool_by_string_representation() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "true".into(),
+        };
+        let doc = json!({"field": true});
+        assert!(expr.matches(&doc));
+    }
+
+    #[test]
+    fn integer_matches_float_with_same_value() {
         let expr = FilterExpressionInner::Integer {
             key: vec!["field".into()],
             expected: 42,
         };
         let doc = json!({"field": 42.0});
-        assert!(!expr.matches(&doc));
+        assert!(expr.matches(&doc));
     }
 
     #[test]
-    fn float_does_not_match_integer() {
+    fn float_matches_integer_with_same_value() {
         let expr = FilterExpressionInner::Float {
             key: vec!["field".into()],
             expected: 42.0,
         };
         let doc = json!({"field": 42});
-        // serde_json represents 42 as i64, not f64
-        assert!(!expr.matches(&doc));
+        assert!(expr.matches(&doc));
     }
 
     #[test]
