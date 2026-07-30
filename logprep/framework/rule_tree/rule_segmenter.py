@@ -5,7 +5,6 @@ from typing import Union
 from logprep.abc.exceptions import LogprepException
 from logprep.filter.expression.filter_expression import (
     And,
-    CompoundFilterExpression,
     FilterExpression,
     Not,
     Or,
@@ -49,7 +48,7 @@ class RuleSegmenter:
         """Segment expression into list of less complex expressions."""
         if RuleSegmenter._has_disjunction(expression):
             rule_segments = RuleSegmenter._segment_expression(expression)
-        elif isinstance(expression, And):
+        elif expression.expression_type == "And":
             rule_segments = [RuleSegmenter._segment_conjunctive_expression(expression)]
         else:
             rule_segments = [[expression]]
@@ -73,13 +72,13 @@ class RuleSegmenter:
             Decision if given expression has OR-expression.
 
         """
-        if isinstance(expression, Or):
+        if expression.expression_type == "Or":
             return True
-        if isinstance(expression, CompoundFilterExpression):
+        if expression.expression_type in ("And", "Or"):
             for exp in expression.children:
                 if RuleSegmenter._has_disjunction(exp):
                     return True
-        if isinstance(expression, Not):
+        if expression.expression_type == "Not":
             return RuleSegmenter._has_disjunction(expression.children[0])
 
         return False
@@ -109,12 +108,12 @@ class RuleSegmenter:
         """
         if not RuleSegmenter._has_disjunction(filter_expression):
             # Handle cases that may occur in recursive parsing process
-            if isinstance(filter_expression, And):
+            if filter_expression.expression_type == "And":
                 return tuple(RuleSegmenter._segment_conjunctive_expression(filter_expression))
             return filter_expression
-        if isinstance(filter_expression, Or):
+        if filter_expression.expression_type == "Or":
             return RuleSegmenter._segment_disjunctive_expression(filter_expression)
-        if isinstance(filter_expression, And):
+        if filter_expression.expression_type == "And":
             segmented_sub_expressions = RuleSegmenter._segment_sub_expressions(filter_expression)
             RuleSegmenter._flatten_tuples_in_list(segmented_sub_expressions)
             return CnfToDnfConverter.convert_cnf_to_dnf(segmented_sub_expressions)
@@ -142,7 +141,7 @@ class RuleSegmenter:
         return expression
 
     @staticmethod
-    def _segment_sub_expressions(filter_expression: CompoundFilterExpression) -> list:
+    def _segment_sub_expressions(filter_expression: FilterExpression) -> list:
         """Recursively segment subexpressions of current expressions"""
         return [
             RuleSegmenter._segment_expression(expression)
@@ -178,9 +177,9 @@ class RuleSegmenter:
         """
         rule_list = []
 
-        if isinstance(expression, And):
+        if expression.expression_type == "And":
             for segment in expression.children:
-                if not isinstance(segment, And):
+                if segment.expression_type != "And":
                     rule_list.append(segment)
                 else:
                     for looped_segment in RuleSegmenter._segment_conjunctive_expression(segment):

@@ -2,8 +2,6 @@
 
 from logprep.filter.expression.filter_expression import (
     Exists,
-    KeyBasedFilterExpression,
-    Not,
     StringFilterExpression,
 )
 from logprep.util.helper import get_dotted_field_list
@@ -31,7 +29,7 @@ class RuleTagger:
         """
         self._tag_map = tag_map
 
-    def add(self, list_of_rule_expressions: list[list[Exists | StringFilterExpression]]):
+    def add(self, list_of_rule_expressions: list):
         """Add tags to rule filter.
 
         This function adds tags to the parsed rule filter. Tags are added according to a defined
@@ -58,19 +56,19 @@ class RuleTagger:
     def _add_tags_to_rule_expressions(self, rule_expressions):
         """Iterate through all expressions and handle different cases"""
         for expression in rule_expressions.copy():
-            next_expression = expression.children[0] if isinstance(expression, Not) else expression
+            next_expression = expression.children[0] if expression.expression_type == "Not" else expression
             if self._expression_in_tag_map(next_expression):
                 if Exists([self._tag_map[next_expression.key[0]]]) not in rule_expressions:
                     self._add_tag(rule_expressions, self._tag_map[next_expression.key[0]])
 
     def _expression_in_tag_map(self, expression):
         return (
-            isinstance(expression, KeyBasedFilterExpression)
+            hasattr(expression, "key")
             and expression.key[0] in self._tag_map.keys()
         )
 
     @staticmethod
-    def _add_tag(expressions: list[KeyBasedFilterExpression], tag_map_value: str):
+    def _add_tag(expressions: list, tag_map_value: str):
         """Add tag helper function.
 
         This function implements the functionality to add a tag for _add_special_tags().
@@ -99,12 +97,12 @@ class RuleTagger:
             expressions.insert(0, Exists(get_dotted_field_list(tag_map_value)))
 
     @staticmethod
-    def _tag_exists(expression: KeyBasedFilterExpression, tag: str) -> bool:
+    def _tag_exists(expression, tag: str) -> bool:
         """Check if the given segment is equal to the given tag.
 
         Parameters
         ----------
-        expression: Union[Exists, StringFilterExpression]
+        expression: FilterExpression
             Expression to check if equal to tag.
         tag: str
             Tag to check for.
@@ -115,10 +113,10 @@ class RuleTagger:
             Decision if the given tag already exists as the given segment.
 
         """
-        if isinstance(expression, Exists):
+        if expression.expression_type == "Exists":
             if repr(expression).rstrip(": *") == tag:
                 return True
-        elif isinstance(expression, StringFilterExpression):
+        elif expression.expression_type == "StringFilterExpression":
             if repr(expression).replace('"', "") == tag:
                 return True
         return False

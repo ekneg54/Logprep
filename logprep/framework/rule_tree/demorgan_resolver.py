@@ -1,16 +1,14 @@
 """Module implements functionality to apply De Morgan's law on rule filter expressions"""
 
-from logprep.abc.exceptions import LogprepException
 from logprep.filter.expression.filter_expression import (
     And,
-    CompoundFilterExpression,
     FilterExpression,
     Not,
     Or,
 )
 
 
-class DeMorganResolverException(LogprepException):
+class DeMorganResolverException(Exception):
     """Raise if demorgan resolver encounters a problem."""
 
 
@@ -35,41 +33,38 @@ class DeMorganResolver:
             expression.
 
         """
-        if isinstance(expression, Not):
+        if expression.expression_type == "Not":
             return self._resolve_not_expression(expression)
-        if isinstance(expression, CompoundFilterExpression):
+        if expression.expression_type in ("And", "Or"):
             return self._resolve_compound_expression(expression)
 
         return expression
 
-    def _resolve_not_expression(self, not_expression: Not) -> FilterExpression:
-        if not isinstance(not_expression, Not):
+    def _resolve_not_expression(self, not_expression: FilterExpression) -> FilterExpression:
+        if not_expression.expression_type != "Not":
             raise DeMorganResolverException(
                 f'Can\'t resolve expression "{not_expression}", since it\'s not of the type "NOT."'
             )
 
-        if not isinstance(not_expression.children[0], CompoundFilterExpression):
+        if not_expression.children[0].expression_type not in ("And", "Or"):
             return not_expression
 
         compound_expression = not_expression.children[0]
-        negated_children = (Not(expression) for expression in compound_expression.children)
+        negated_children = tuple(Not(expression) for expression in compound_expression.children)
 
-        if isinstance(compound_expression, Or):
+        if compound_expression.expression_type == "Or":
             expression = And(*negated_children)
-        elif isinstance(compound_expression, And):
-            expression = Or(*negated_children)
         else:
-            raise DeMorganResolverException(
-                f'Could not resolve expression "{not_expression}", '
-                f'since its child is neither of the type "AND" nor "OR".'
-            )
+            expression = Or(*negated_children)
 
         return self._resolve_compound_expression(expression)
 
     def _resolve_compound_expression(
-        self, compound_expression: CompoundFilterExpression
-    ) -> CompoundFilterExpression:
-        compound_expression.children = tuple(
+        self, compound_expression: FilterExpression
+    ) -> FilterExpression:
+        resolved_children = tuple(
             self.resolve(expression) for expression in compound_expression.children
         )
-        return compound_expression
+        if compound_expression.expression_type == "And":
+            return And(*resolved_children)
+        return Or(*resolved_children)

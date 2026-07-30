@@ -4,10 +4,7 @@ from typing import Union
 
 from logprep.abc.exceptions import LogprepException
 from logprep.filter.expression.filter_expression import (
-    Always,
     FilterExpression,
-    KeyBasedFilterExpression,
-    Not,
 )
 
 
@@ -74,13 +71,13 @@ class RuleSorter:
             Comparison value to use for sorting.
 
         """
-        if isinstance(expression, Always):
+        if expression.expression_type == "Always":
             return None
 
-        if isinstance(expression, Not):
+        if expression.expression_type == "Not":
             return RuleSorter._sort_not_expression(expression, priority_dict)
 
-        if isinstance(expression, KeyBasedFilterExpression):
+        if hasattr(expression, "key"):
             return priority_dict.get(expression.key_as_dotted_string, repr(expression))
 
         raise RuleSorterException(f'Could not sort "{expression}"')
@@ -88,11 +85,12 @@ class RuleSorter:
     @staticmethod
     def _sort_not_expression(expression, priority_dict):
         try:
-            if isinstance(expression.children[0], Not):
-                if isinstance(expression.children[0].children[0], KeyBasedFilterExpression):
-                    return priority_dict[expression.children[0].children[0].key[0]]
+            if expression.children[0].expression_type == "Not":
+                child = expression.children[0].children[0]
+                if hasattr(child, "key"):
+                    return priority_dict[child.key[0]]
 
-            if isinstance(expression.children[0], KeyBasedFilterExpression):
+            if hasattr(expression.children[0], "key"):
                 return priority_dict[expression.children[0].key_as_dotted_string]
         except KeyError:
             pass

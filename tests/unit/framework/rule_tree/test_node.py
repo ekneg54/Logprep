@@ -8,7 +8,7 @@ class TestNode:
         expression = StringFilterExpression(["foo"], "bar")
         node = Node(expression)
 
-        assert isinstance(node.expression, StringFilterExpression)
+        assert node.expression.expression_type == "StringFilterExpression"
         assert node.expression == expression
         assert not node.children
 

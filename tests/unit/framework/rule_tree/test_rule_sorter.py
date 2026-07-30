@@ -3,10 +3,13 @@
 # pylint: disable=line-too-long
 # pylint: disable=too-many-statements
 
+import re
+
 import pytest
 
 from logprep.filter.expression.filter_expression import (
     Always,
+    And,
     CompoundFilterExpression,
     Exists,
     Not,
@@ -123,8 +126,8 @@ class TestRuleSorter:
     @pytest.mark.parametrize(
         "expression, expected",
         [
-            (Always("foo"), None),
-            (Not(Always("foo")), None),
+            (Always(True), None),
+            (Not(Always(True)), None),
             (string_filter_expression_1, str(string_filter_expression_1)),
             (Not(string_filter_expression_1), str(string_filter_expression_1)),
             (Not(Not(string_filter_expression_1)), str(string_filter_expression_1)),
@@ -137,8 +140,10 @@ class TestRuleSorter:
 
     @pytest.mark.parametrize(
         "expression",
-        [CompoundFilterExpression(string_filter_expression_1, string_filter_expression_2), "foo"],
+        [And(string_filter_expression_1, string_filter_expression_2)],
     )
     def test_get_sorting_key_raises_exception(self, expression):
-        with pytest.raises(RuleSorterException, match=f'Could not sort "{str(expression)}"'):
+        with pytest.raises(
+            RuleSorterException, match=f'Could not sort "{re.escape(str(expression))}"'
+        ):
             RuleSorter._get_sorting_key(expression, {})

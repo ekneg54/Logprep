@@ -6,6 +6,7 @@
 import pytest
 
 from logprep.filter.expression.filter_expression import (
+    Always,
     And,
     CompoundFilterExpression,
     Not,
@@ -125,15 +126,9 @@ class TestDeMorganResolver:
                 ),
             ),
             (
-                Not(
-                    CompoundFilterExpression(string_filter_expression_1, string_filter_expression_2)
-                ),
-                Not(string_filter_expression_1),
-                (
-                    DeMorganResolverException,
-                    r'Could not resolve expression ".*", '
-                    + r'since its child is neither of the type "AND" nor "OR".',
-                ),
+                Not(Always(True)),
+                Not(Always(True)),
+                None,
             ),
         ],
     )

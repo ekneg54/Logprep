@@ -124,7 +124,7 @@ class RuleParser:
             temp_parsed_rule = parsed_rule.copy()
             added_exists_filter_count = 0
             for segment_idx, segment in enumerate(temp_parsed_rule):
-                if isinstance(segment, (Exists, Not, Always)):
+                if segment.expression_type in ("Exists", "Not", "Always"):
                     continue
 
                 exists_filter = Exists(segment.key)
