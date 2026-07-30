@@ -3186,42 +3186,1633 @@ uv run python benchmarks/compare_phases.py --phase-baseline 1 --phase-current 2
 
 ## Phase 3: Rule Tree + Rule Matching
 
-**Ziel**: `RuleTree` und `Rule`-Matching komplett in Rust implementieren.
+**Ziel**: `RuleTree` und die gesamte Rule-Parsing-Pipeline (DeMorganResolver, RuleSegmenter, RuleSorter, RuleTagger, RuleParser, Node) komplett in Rust implementieren. Python-Code wird auf einen dünnen Wrapper am `RuleTree` reduziert.
 
-**Begründung**: Zentraler Matching-Mechanismus, wird von jedem `Processor.process()` aufgerufen. Nutzt die Rust-Filter-Engine aus Phase 2.
+**Begründung**: Zentraler Matching-Mechanismus, wird von jedem `Processor.process()` aufgerufen. Die Rust-Filter-Engine aus Phase 2 liefert `FilterExpressionInner` — die RuleTree-Komponenten arbeiten ab Phase 3 direkt damit, ohne je in Python-Objekte zu konvertieren.
 
-### Rust-Struktur
+**Leitprinzip für Phase 3**: Innerhalb der migrierten Rust-Komponenten werden **keine Python-Objekte** verwendet. Der gesamte RuleTree arbeitet intern mit:
+- `FilterExpressionInner` (Enum aus Phase 2) — kein `PyFilterExpression`
+- `serde_json::Value` für Event-Dokumente — kein Python-Dict
+- Integer Rule-IDs (`u64`) — kein Python-`Rule`-Objekt
+
+Der Übergang zu Python geschieht **ausschließlich** am `RuleTree`-Wrapper:
+- Beim Hinzufügen einer Rule wird das `FilterExpressionInner` aus dem Python-`Rule`-Objekt extrahiert
+- Beim Matching werden Integer-IDs zurückgegeben, die der Python-Wrapper auf `Rule`-Objekte mapped
+
+**Abhängigkeiten**: Phase 2 (FilterExpressionInner + Lucene-Parser in Rust, vollständig)
+**Import-Sites nach Phase 3**: Alle 7 Dateien in `logprep/framework/rule_tree/` werden ersetzt
+
+---
+
+### Rust-Modulstruktur
 
 ```
 crates/logprep-core/src/rule/
-├── mod.rs
-├── tree.rs           # RuleTree (Baum-Struktur)
-├── segment.rs        # Rule-Segmentierung
-└── matcher.rs        # Matching-Logik
+├── mod.rs           # pymodule registration + PyRuleTree (PyO3-Adapter)
+├── tree.rs          # TreeInner (pure Rust, keine PyO3-Typen)
+├── node.rs          # NodeInner (pure Rust)
+├── parser.rs        # RuleParserInner (pure Rust) — orchestriert Pipeline
+├── demorgan.rs      # DeMorganResolverInner (pure Rust)
+├── segmenter.rs     # RuleSegmenterInner + CnfToDnfConverterInner (pure Rust)
+├── sorter.rs        # RuleSorterInner (pure Rust)
+└── tagger.rs        # RuleTaggerInner (pure Rust)
 ```
 
-### Python-Brücke
+### Architektur
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Python                                                      │
+│  ┌──────────────────────────────────────────────────┐        │
+│  │ RuleTree (thin wrapper)                            │        │
+│  │  - _rule_id_to_rule: dict[int, Rule]              │        │
+│  │  - _inner: PyRuleTree (Rust)                      │        │
+│  │  - add_rule(rule) → extract Inner, call Rust      │        │
+│  │  - get_matching_rules(event) → Rust → lookup IDs  │        │
+│  └──────────────┬───────────────────────────────────┘        │
+│                 │ PyO3                                       │
+│                 ▼                                            │
+│  ┌──────────────────────────────────────────────────┐        │
+│  │ PyRuleTree (PyO3 Adapter)                         │        │
+│  │  - add_rule(segments: Vec<Vec<FilterExprInner>>,  │        │
+│  │               rule_id: u64)                       │        │
+│  │  - get_matching_rules(event: &PyDict) → Vec<u64>  │        │
+│  │  - parse_rule(filter_inner) → Vec<Vec<...>>       │        │
+│  └──────────────┬───────────────────────────────────┘        │
+└─────────────────┼───────────────────────────────────────────┘
+                  │ Rust-Typen, keine Python-Objekte
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Pure Rust Core                                               │
+│  ┌──────────────────────────┐  ┌──────────────────────────┐  │
+│  │ TreeInner                 │  │ RuleParserInner           │  │
+│  │  - root: NodeInner        │  │  - demorgan → dnf → sort │  │
+│  │  - add_rule(segs, id)     │  │    → exists → tag        │  │
+│  │  - get_matching(event)    │  │  - arbeitet auf           │  │
+│  │    → Vec<u64>             │  │    FilterExpressionInner  │  │
+│  └──────────────────────────┘  └──────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Schritt 3a: NodeInner + TreeInner (Pure Rust Core)
+
+**Ziel**: Die Baumstruktur als pure Rust-Datentypen implementieren. Kein PyO3, keine Python-Objekte. Arbeiten auf `FilterExpressionInner` und `serde_json::Value`.
+
+**Neue Dateien:**
+
+- `crates/logprep-core/src/rule/node.rs`
+- `crates/logprep-core/src/rule/tree.rs`
+- `crates/logprep-core/src/rule/mod.rs` (initial: nur mod-Deklarationen)
+
+#### `crates/logprep-core/src/rule/node.rs`
+
+```rust
+use crate::filter::expression::FilterExpressionInner;
+
+/// Ein Knoten im RuleTree. Enthält einen FilterExpressionInner (oder None für Root),
+/// Children-Vec und eine Liste von Rule-IDs die an diesem Knoten hängen.
+#[derive(Debug, Clone)]
+pub struct NodeInner {
+    pub expression: Option<FilterExpressionInner>,
+    pub children: Vec<NodeInner>,
+    pub matching_rule_ids: Vec<u64>,
+}
+
+impl NodeInner {
+    pub fn new(expression: Option<FilterExpressionInner>) -> Self {
+        Self {
+            expression,
+            children: Vec::new(),
+            matching_rule_ids: Vec::new(),
+        }
+    }
+
+    /// Prüft ob dieser Node auf ein Event matched.
+    /// Nutzt `FilterExpressionInner::matches()` (safe matching).
+    /// Root (expression=None) matched immer.
+    pub fn does_match(&self, document: &serde_json::Value) -> bool {
+        match &self.expression {
+            Some(expr) => expr.matches(document),
+            None => true, // Root matched immer
+        }
+    }
+
+    /// Fügt ein Child hinzu.
+    pub fn add_child(&mut self, node: NodeInner) {
+        self.children.push(node);
+    }
+
+    /// Findet ein Child mit identischem Expression (per ==).
+    pub fn get_child_with_expression(&self, expr: &FilterExpressionInner) -> Option<&NodeInner> {
+        self.children.iter().find(|child| {
+            child.expression.as_ref().map_or(false, |e| e == expr)
+        })
+    }
+
+    /// Wie get_child_with_expression but mutable.
+    pub fn get_child_with_expression_mut(&mut self, expr: &FilterExpressionInner) -> Option<&mut NodeInner> {
+        self.children.iter_mut().find(|child| {
+            child.expression.as_ref().map_or(false, |e| e == expr)
+        })
+    }
+
+    /// Rekursive Größenberechnung.
+    pub fn size(&self) -> usize {
+        1 + self.children.iter().map(|c| c.size()).sum::<usize>()
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/tree.rs`
+
+```rust
+use serde_json::Value;
+use crate::filter::expression::FilterExpressionInner;
+use super::node::NodeInner;
+
+/// Der RuleTree in Pure Rust. Arbeitet auf FilterExpressionInner + u64 Rule-IDs.
+/// Kein PyO3, keine Python-Objekte.
+#[derive(Debug, Clone)]
+pub struct TreeInner {
+    root: NodeInner,
+    rule_count: usize,
+}
+
+impl TreeInner {
+    pub fn new() -> Self {
+        Self {
+            root: NodeInner::new(None),
+            rule_count: 0,
+        }
+    }
+
+    /// Fügt ein Rule (als Liste von DNF-Segmenten) in den Baum ein.
+    /// `segments` ist ein DNF-Segment: [FilterExpressionInner, ...] (AND-conjoined).
+    pub fn add_rule(&mut self, segments: &[FilterExpressionInner], rule_id: u64) {
+        let mut current = &mut self.root;
+        for expr in segments {
+            if let Some(existing) = current.get_child_with_expression_mut(expr) {
+                current = existing;
+            } else {
+                let new_node = NodeInner::new(Some(expr.clone()));
+                current.add_child(new_node);
+                // Da add_child das NodeInner owned, müssen wir es per Index finden
+                let idx = current.children.len() - 1;
+                current = &mut current.children[idx];
+            }
+        }
+        if !current.matching_rule_ids.contains(&rule_id) {
+            current.matching_rule_ids.push(rule_id);
+        }
+        self.rule_count += 1;
+    }
+
+    /// Findet alle Rule-IDs die auf ein Event matchen.
+    /// DFS-Traversierung: besucht nur Child-Nodes die matchen.
+    pub fn get_matching_rules(&self, event: &Value) -> Vec<u64> {
+        let mut matches = Vec::new();
+        self.collect_matches(&self.root, event, &mut matches);
+        // Deduplizieren unter Beibehaltung der Reihenfolge
+        let mut seen = std::collections::HashSet::new();
+        matches.retain(|id| seen.insert(*id));
+        matches
+    }
+
+    fn collect_matches(&self, node: &NodeInner, event: &Value, matches: &mut Vec<u64>) {
+        for child in &node.children {
+            if child.does_match(event) {
+                // Rule-IDs dieses Knotens sammeln
+                matches.extend_from_slice(&child.matching_rule_ids);
+                // Rekursiv in Children weitermachen
+                self.collect_matches(child, event, matches);
+            }
+        }
+    }
+
+    pub fn rule_count(&self) -> usize {
+        self.rule_count
+    }
+
+    pub fn size(&self) -> usize {
+        self.root.size()
+    }
+
+    pub fn root(&self) -> &NodeInner {
+        &self.root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+    use serde_json::json;
+
+    #[test]
+    fn empty_tree_returns_no_rules() {
+        let tree = TreeInner::new();
+        let event = json!({"field": "value"});
+        assert!(tree.get_matching_rules(&event).is_empty());
+    }
+
+    #[test]
+    fn simple_rule_matches() {
+        let mut tree = TreeInner::new();
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "value".into(),
+        };
+        tree.add_rule(&[expr], 1);
+        let event = json!({"field": "value"});
+        assert_eq!(tree.get_matching_rules(&event), vec![1]);
+    }
+
+    #[test]
+    fn non_matching_value() {
+        let mut tree = TreeInner::new();
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "other".into(),
+        };
+        tree.add_rule(&[expr], 1);
+        let event = json!({"field": "value"});
+        assert!(tree.get_matching_rules(&event).is_empty());
+    }
+
+    #[test]
+    fn multi_segment_and_rule() {
+        let mut tree = TreeInner::new();
+        let expr1 = FilterExpressionInner::String {
+            key: vec!["a".into()],
+            expected: "1".into(),
+        };
+        let expr2 = FilterExpressionInner::String {
+            key: vec!["b".into()],
+            expected: "2".into(),
+        };
+        tree.add_rule(&[expr1, expr2], 42);
+        let event = json!({"a": "1", "b": "2"});
+        assert_eq!(tree.get_matching_rules(&event), vec![42]);
+    }
+
+    #[test]
+    fn partial_and_does_not_match() {
+        let mut tree = TreeInner::new();
+        let expr1 = FilterExpressionInner::String {
+            key: vec!["a".into()],
+            expected: "1".into(),
+        };
+        let expr2 = FilterExpressionInner::String {
+            key: vec!["b".into()],
+            expected: "2".into(),
+        };
+        tree.add_rule(&[expr1, expr2], 42);
+        let event = json!({"a": "1", "b": "WRONG"});
+        assert!(tree.get_matching_rules(&event).is_empty());
+    }
+
+    #[test]
+    fn deduplicates_rule_ids() {
+        let mut tree = TreeInner::new();
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "val".into(),
+        };
+        tree.add_rule(&[expr.clone()], 1);
+        tree.add_rule(&[expr.clone()], 1); // gleiche Rule-ID doppelt
+        let event = json!({"field": "val"});
+        let result = tree.get_matching_rules(&event);
+        assert_eq!(result, vec![1]); // nur einmal
+    }
+
+    #[test]
+    fn multiple_rules_match() {
+        let mut tree = TreeInner::new();
+        let expr1 = FilterExpressionInner::Exists { key: vec!["a".into()] };
+        let expr2 = FilterExpressionInner::Exists { key: vec!["b".into()] };
+        tree.add_rule(&[expr1.clone()], 10);
+        tree.add_rule(&[expr1, expr2], 20);
+        let event = json!({"a": 1, "b": 2});
+        let matches = tree.get_matching_rules(&event);
+        assert!(matches.contains(&10));
+        assert!(matches.contains(&20));
+    }
+
+    #[test]
+    fn child_lookup_respects_equality() {
+        let mut tree = TreeInner::new();
+        let expr_a = FilterExpressionInner::String {
+            key: vec!["x".into()],
+            expected: "1".into(),
+        };
+        let expr_b = FilterExpressionInner::String {
+            key: vec!["x".into()],
+            expected: "2".into(),
+        };
+        tree.add_rule(&[expr_a.clone()], 1);
+        tree.add_rule(&[expr_a, expr_b], 2);
+        assert_eq!(tree.root().children.len(), 1); // gleicher erster Pfad
+    }
+
+    #[test]
+    fn size_counts_all_nodes() {
+        let mut tree = TreeInner::new();
+        tree.add_rule(&[
+            FilterExpressionInner::Exists { key: vec!["a".into()] },
+        ], 1);
+        tree.add_rule(&[
+            FilterExpressionInner::Exists { key: vec!["a".into()] },
+            FilterExpressionInner::Exists { key: vec!["b".into()] },
+        ], 2);
+        assert_eq!(tree.size(), 3); // root + a + b
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/mod.rs`
+
+```rust
+pub mod node;
+pub mod tree;
+
+use pyo3::prelude::*;
+
+/// PyO3-Submodul — wird in lib.rs registriert.
+#[pymodule]
+pub fn rule(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // PyRuleTree wird in Schritt 3b hinzugefügt
+    Ok(())
+}
+```
+
+**Verifizierung:**
+```bash
+cargo test -p logprep-core
+# Python-Tests noch unverändert (Phase 2-Step 2d nicht vollständig)
+```
+
+---
+
+### Schritt 3b: Rule-Parsing-Pipeline in Pure Rust
+
+**Ziel**: Alle 5 Parser-Komponenten (`DeMorganResolver`, `RuleSegmenter`, `CnfToDnfConverter`, `RuleSorter`, `RuleTagger`) + `RuleParser`-Orchestrator in Rust implementieren. Alle arbeiten auf `FilterExpressionInner`-Enums, nicht auf Python-Objekten.
+
+**Hinweis**: Die `RuleTagger`- und `RuleSorter`-Logik in Python nutzt Attribute wie `.expression_type`, `.children`, `.key` — das wird in Rust durch Pattern-Matching auf `FilterExpressionInner`-Varianten ersetzt.
+
+**Neue Dateien:**
+
+- `crates/logprep-core/src/rule/demorgan.rs`
+- `crates/logprep-core/src/rule/segmenter.rs`
+- `crates/logprep-core/src/rule/sorter.rs`
+- `crates/logprep-core/src/rule/tagger.rs`
+- `crates/logprep-core/src/rule/parser.rs`
+- `Cargo.toml` update: `indexmap` für sortierte Dicts
+
+**Cargo.toml (Workspace):**
+```toml
+[workspace.dependencies]
+# ... bestehende ...
+indexmap = "2"
+```
+
+**Cargo.toml (logprep-core):**
+```toml
+[dependencies]
+# ... bestehende ...
+indexmap.workspace = true
+```
+
+#### `crates/logprep-core/src/rule/demorgan.rs`
+
+```rust
+use crate::filter::expression::FilterExpressionInner;
+
+/// Wendet De Morgans Gesetze auf FilterExpressionInner-Bäume an.
+/// Reiner Rust-Code, kein PyO3.
+pub struct DeMorganResolverInner;
+
+impl DeMorganResolverInner {
+    /// Resolved NOT-Expressions rekursiv:
+    /// - NOT (A AND B) → (NOT A) OR (NOT B)
+    /// - NOT (A OR B)  → (NOT A) AND (NOT B)
+    /// - NOT (NOT A)   → A
+    /// - Einfaches NOT (z.B. NOT String) bleibt erhalten
+    pub fn resolve(expr: &FilterExpressionInner) -> FilterExpressionInner {
+        match expr {
+            FilterExpressionInner::Not { child } => {
+                Self::resolve_not(child)
+            }
+            FilterExpressionInner::And { children } => {
+                let resolved: Vec<_> = children.iter().map(Self::resolve).collect();
+                FilterExpressionInner::And { children: resolved }
+            }
+            FilterExpressionInner::Or { children } => {
+                let resolved: Vec<_> = children.iter().map(Self::resolve).collect();
+                FilterExpressionInner::Or { children: resolved }
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn resolve_not(inner: &FilterExpressionInner) -> FilterExpressionInner {
+        match inner {
+            // NOT (NOT A) → A (doppelte Negation aufheben)
+            FilterExpressionInner::Not { child } => Self::resolve(child),
+
+            // NOT (A AND B) → (NOT A) OR (NOT B)
+            FilterExpressionInner::And { children } => {
+                let negated: Vec<_> = children.iter()
+                    .map(|c| Self::resolve(&FilterExpressionInner::Not {
+                        child: Box::new(c.clone()),
+                    }))
+                    .collect();
+                FilterExpressionInner::Or { children: negated }
+            }
+
+            // NOT (A OR B) → (NOT A) AND (NOT B)
+            FilterExpressionInner::Or { children } => {
+                let negated: Vec<_> = children.iter()
+                    .map(|c| Self::resolve(&FilterExpressionInner::Not {
+                        child: Box::new(c.clone()),
+                    }))
+                    .collect();
+                FilterExpressionInner::And { children: negated }
+            }
+
+            // Einfaches NOT (z.B. NOT String) bleibt, aber innen resolved
+            other => FilterExpressionInner::Not {
+                child: Box::new(Self::resolve(other)),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+
+    #[test]
+    fn simple_not_stays() {
+        let expr = FilterExpressionInner::Not {
+            child: Box::new(FilterExpressionInner::Exists {
+                key: vec!["a".into()],
+            }),
+        };
+        let resolved = DeMorganResolverInner::resolve(&expr);
+        assert!(matches!(resolved, FilterExpressionInner::Not { .. }));
+    }
+
+    #[test]
+    fn not_and_becomes_or() {
+        let expr = FilterExpressionInner::Not {
+            child: Box::new(FilterExpressionInner::And {
+                children: vec![
+                    FilterExpressionInner::Exists { key: vec!["a".into()] },
+                    FilterExpressionInner::Exists { key: vec!["b".into()] },
+                ],
+            }),
+        };
+        let resolved = DeMorganResolverInner::resolve(&expr);
+        assert!(matches!(resolved, FilterExpressionInner::Or { .. }));
+    }
+
+    #[test]
+    fn not_or_becomes_and() {
+        let expr = FilterExpressionInner::Not {
+            child: Box::new(FilterExpressionInner::Or {
+                children: vec![
+                    FilterExpressionInner::Exists { key: vec!["a".into()] },
+                    FilterExpressionInner::Exists { key: vec!["b".into()] },
+                ],
+            }),
+        };
+        let resolved = DeMorganResolverInner::resolve(&expr);
+        assert!(matches!(resolved, FilterExpressionInner::And { .. }));
+    }
+
+    #[test]
+    fn double_not_cancels() {
+        let expr = FilterExpressionInner::Not {
+            child: Box::new(FilterExpressionInner::Not {
+                child: Box::new(FilterExpressionInner::Exists {
+                    key: vec!["a".into()],
+                }),
+            }),
+        };
+        let resolved = DeMorganResolverInner::resolve(&expr);
+        assert!(matches!(resolved, FilterExpressionInner::Exists { .. }));
+    }
+
+    #[test]
+    fn non_not_unchanged() {
+        let expr = FilterExpressionInner::Always { value: true };
+        let resolved = DeMorganResolverInner::resolve(&expr);
+        assert!(matches!(resolved, FilterExpressionInner::Always { value: true }));
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/segmenter.rs`
+
+```rust
+use crate::filter::expression::FilterExpressionInner;
+
+/// Segmentiert einen FilterExpressionInner-Baum in DNF (disjunktive Normalform).
+/// Ergebnis: Vec<Vec<FilterExpressionInner>> — äußere Vec = OR, innere = AND.
+pub struct RuleSegmenterInner;
+
+impl RuleSegmenterInner {
+    /// Haupt-API: verwandelt Expression in DNF-Liste.
+    pub fn segment_into_dnf(expr: &FilterExpressionInner) -> Vec<Vec<FilterExpressionInner>> {
+        if Self::has_disjunction(expr) {
+            Self::segment_expression(expr)
+        } else if matches!(expr, FilterExpressionInner::And { .. }) {
+            vec![Self::segment_conjunctive(expr)]
+        } else {
+            vec![vec![expr.clone()]]
+        }
+    }
+
+    fn has_disjunction(expr: &FilterExpressionInner) -> bool {
+        match expr {
+            FilterExpressionInner::Or { .. } => true,
+            FilterExpressionInner::And { children } | FilterExpressionInner::Or { children } => {
+                children.iter().any(|c| Self::has_disjunction(c))
+            }
+            FilterExpressionInner::Not { child } => Self::has_disjunction(child),
+            _ => false,
+        }
+    }
+
+    fn segment_expression(expr: &FilterExpressionInner) -> Vec<Vec<FilterExpressionInner>> {
+        if !Self::has_disjunction(expr) {
+            if matches!(expr, FilterExpressionInner::And { .. }) {
+                return vec![Self::segment_conjunctive(expr)];
+            }
+            return vec![vec![expr.clone()]];
+        }
+        match expr {
+            FilterExpressionInner::Or { children } => {
+                Self::segment_disjunctive(children)
+            }
+            FilterExpressionInner::And { children } => {
+                let segmented: Vec<_> = children.iter()
+                    .map(|c| Self::segment_expression(c))
+                    .collect();
+                let mut flat = Vec::new();
+                for seg in &segmented {
+                    if seg.len() == 1 && seg[0].len() == 1 {
+                        flat.push(seg[0][0].clone());
+                    } else {
+                        // flatten tuples — alles ein AND-Teil
+                        for inner in seg {
+                            if inner.len() == 1 {
+                                flat.push(inner[0].clone());
+                            } else {
+                                // mehrere Elemente = selbst ein AND, in AND zusammenfassen
+                                // Rekursion nötig: CnfToDnfConverter
+                                flat.extend(inner.iter().cloned());
+                            }
+                        }
+                    }
+                }
+                CnfToDnfConverterInner::convert(&[flat])
+            }
+            _ => vec![vec![expr.clone()]],
+        }
+    }
+
+    fn segment_disjunctive(children: &[FilterExpressionInner]) -> Vec<Vec<FilterExpressionInner>> {
+        let mut result = Vec::new();
+        for child in children {
+            let segmented = Self::segment_expression(child);
+            for seg in segmented {
+                if seg.len() == 1 {
+                    result.push(vec![seg.into_iter().next().unwrap()]);
+                } else {
+                    result.push(seg);
+                }
+            }
+        }
+        result
+    }
+
+    fn segment_conjunctive(expr: &FilterExpressionInner) -> Vec<FilterExpressionInner> {
+        match expr {
+            FilterExpressionInner::And { children } => {
+                let mut result = Vec::new();
+                for child in children {
+                    if matches!(child, FilterExpressionInner::And { .. }) {
+                        result.extend(Self::segment_conjunctive(child));
+                    } else {
+                        result.push(child.clone());
+                    }
+                }
+                result
+            }
+            other => vec![other.clone()],
+        }
+    }
+}
+
+/// Konvertiert CNF → DNF mittels distributivem Gesetz.
+pub struct CnfToDnfConverterInner;
+
+impl CnfToDnfConverterInner {
+    /// CNF: Vec<FilterExpressionInner> (AND von Children, einige sind OR-Listen)
+    /// DNF: Vec<Vec<FilterExpressionInner>> (OR von ANDs)
+    pub fn convert(cnf: &[FilterExpressionInner]) -> Vec<Vec<FilterExpressionInner>> {
+        let mut dnf: Vec<Vec<FilterExpressionInner>> = Vec::new();
+
+        // OR-Segmente finden (Elemente die selbst Listen wären — in Rust sind
+        // OR-Children direkt FilterExpressionInner::Or-Varianten)
+        let mut non_or: Vec<FilterExpressionInner> = Vec::new();
+        let mut or_segments: Vec<Vec<FilterExpressionInner>> = Vec::new();
+
+        for item in cnf {
+            if let FilterExpressionInner::Or { children } = item {
+                or_segments.push(children.clone());
+            } else {
+                non_or.push(item.clone());
+            }
+        }
+
+        if or_segments.is_empty() {
+            // Kein OR in AND — einfacher Fall
+            return vec![cnf.to_vec()];
+        }
+
+        // Distributives Gesetz anwenden: (A OR B) AND C → (A AND C) OR (B AND C)
+        let first_or = &or_segments[0];
+        for or_elem in first_or {
+            let mut and_group = Vec::new();
+            and_group.push(or_elem.clone());
+            and_group.extend(non_or.clone());
+            for remaining in &or_segments[1..] {
+                for rem_elem in remaining {
+                    let mut extended = and_group.clone();
+                    extended.push(rem_elem.clone());
+                    dnf.push(extended);
+                }
+            }
+            if or_segments.len() == 1 {
+                dnf.push(and_group);
+            }
+        }
+        // Deduplizieren
+        dnf.sort();
+        dnf.dedup();
+        dnf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+
+    fn exists(key: &str) -> FilterExpressionInner {
+        FilterExpressionInner::Exists { key: vec![key.into()] }
+    }
+
+    fn string_expr(key: &str, val: &str) -> FilterExpressionInner {
+        FilterExpressionInner::String {
+            key: vec![key.into()],
+            expected: val.into(),
+        }
+    }
+
+    #[test]
+    fn simple_expression_stays() {
+        let expr = exists("a");
+        let dnf = RuleSegmenterInner::segment_into_dnf(&expr);
+        assert_eq!(dnf.len(), 1);
+        assert_eq!(dnf[0].len(), 1);
+    }
+
+    #[test]
+    fn and_expression() {
+        let expr = FilterExpressionInner::And {
+            children: vec![exists("a"), exists("b")],
+        };
+        let dnf = RuleSegmenterInner::segment_into_dnf(&expr);
+        assert_eq!(dnf.len(), 1);
+        assert_eq!(dnf[0].len(), 2);
+    }
+
+    #[test]
+    fn or_expression() {
+        let expr = FilterExpressionInner::Or {
+            children: vec![exists("a"), exists("b")],
+        };
+        let dnf = RuleSegmenterInner::segment_into_dnf(&expr);
+        assert_eq!(dnf.len(), 2);
+        assert_eq!(dnf[0].len(), 1);
+        assert_eq!(dnf[1].len(), 1);
+    }
+
+    #[test]
+    fn distribution_a_or_b_and_c() {
+        // (A OR B) AND C → [[A, C], [B, C]]
+        let expr = FilterExpressionInner::And {
+            children: vec![
+                FilterExpressionInner::Or {
+                    children: vec![string_expr("a", "1"), string_expr("b", "2")],
+                },
+                string_expr("c", "3"),
+            ],
+        };
+        let dnf = RuleSegmenterInner::segment_into_dnf(&expr);
+        assert_eq!(dnf.len(), 2, "DNF should have 2 OR branches");
+        for branch in &dnf {
+            assert_eq!(branch.len(), 2, "Each branch should have 2 AND expressions");
+            // Prüfe dass 'c:3' in jeder branch vorkommt
+            assert!(branch.iter().any(|e| matches!(e, FilterExpressionInner::String { expected, .. } if expected == "3")));
+        }
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/sorter.rs`
+
+```rust
+use std::collections::HashMap;
+use crate::filter::expression::FilterExpressionInner;
+
+/// Sortiert DNF-Segmente nach Priorität.
+pub struct RuleSorterInner;
+
+impl RuleSorterInner {
+    /// Sortiert jede innere Vec (AND-Segment) nach priority_dict.
+    /// priority_dict: field_name → priority_string (z.B. "category" → "01")
+    pub fn sort_segments(
+        segments: &mut [Vec<FilterExpressionInner>],
+        priority_dict: &HashMap<String, String>,
+    ) {
+        // Pre-compute sorting keys für jedes Expression
+        let mut key_cache: HashMap<String, Option<String>> = HashMap::new();
+
+        for segment in segments.iter_mut() {
+            segment.sort_by(|a, b| {
+                let key_a = Self::sorting_key(a, priority_dict, &mut key_cache);
+                let key_b = Self::sorting_key(b, priority_dict, &mut key_cache);
+                key_a.cmp(&key_b)
+            });
+        }
+    }
+
+    fn sorting_key(
+        expr: &FilterExpressionInner,
+        priority_dict: &HashMap<String, String>,
+        cache: &mut HashMap<String, Option<String>>,
+    ) -> (u8, String) {
+        // Always-Expressions haben höchste Priorität (None = None = cmp gibt 0 = keep order)
+        if matches!(expr, FilterExpressionInner::Always { .. }) {
+            return (0, String::new()); // Always zuerst
+        }
+
+        let dotted = match expr {
+            FilterExpressionInner::Not { child } => return Self::sorting_key(child, priority_dict, cache),
+            FilterExpressionInner::String { key, .. }
+            | FilterExpressionInner::Wildcard { key, .. }
+            | FilterExpressionInner::Sigma { key, .. }
+            | FilterExpressionInner::Integer { key, .. }
+            | FilterExpressionInner::Float { key, .. }
+            | FilterExpressionInner::IntegerRange { key, .. }
+            | FilterExpressionInner::FloatRange { key, .. }
+            | FilterExpressionInner::StringRange { key, .. }
+            | FilterExpressionInner::Regex { key, .. }
+            | FilterExpressionInner::Exists { key }
+            | FilterExpressionInner::Null { key } => {
+                let d = key.join(".");
+                d
+            }
+            _ => return (1, String::new()),
+        };
+
+        let repr = expr.to_repr();
+
+        if let Some(priority) = priority_dict.get(&dotted) {
+            (2, priority.clone())
+        } else {
+            (1, repr)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+
+    #[test]
+    fn sort_by_priority() {
+        let mut segments = vec![
+            vec![FilterExpressionInner::String {
+                key: vec!["z".into()],
+                expected: "1".into(),
+            }],
+            vec![FilterExpressionInner::String {
+                key: vec!["a".into()],
+                expected: "2".into(),
+            }],
+        ];
+        let mut priority = HashMap::new();
+        priority.insert("a".into(), "01".into());
+        RuleSorterInner::sort_segments(&mut segments, &priority);
+        // "a" hat priority "01" → sollte vor "z" sein
+        let first_key = match &segments[0][0] {
+            FilterExpressionInner::String { key, .. } => key[0].clone(),
+            _ => panic!(),
+        };
+        assert_eq!(first_key, "a");
+    }
+
+    #[test]
+    fn always_first() {
+        let mut segments = vec![
+            vec![FilterExpressionInner::Always { value: true }],
+            vec![FilterExpressionInner::Exists { key: vec!["a".into()] }],
+        ];
+        RuleSorterInner::sort_segments(&mut segments, &HashMap::new());
+        assert!(matches!(segments[0][0], FilterExpressionInner::Always { .. }));
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/tagger.rs`
+
+```rust
+use std::collections::HashMap;
+use crate::filter::expression::FilterExpressionInner;
+
+/// Fügt Tag-Checks zu DNF-Segmenten hinzu.
+pub struct RuleTaggerInner;
+
+impl RuleTaggerInner {
+    /// tag_map: field_name → tag_name (z.B. "check_field" → "check-tag")
+    /// Fügt Exists(tag_name) oder StringExpr(tag_name) als ersten Eintrag in jedes Segment.
+    pub fn add_tags(
+        segments: &mut Vec<Vec<FilterExpressionInner>>,
+        tag_map: &HashMap<String, String>,
+    ) {
+        if tag_map.is_empty() {
+            return;
+        }
+
+        for segment in segments.iter_mut() {
+            Self::add_tags_to_segment(segment, tag_map);
+        }
+    }
+
+    fn add_tags_to_segment(
+        segment: &mut Vec<FilterExpressionInner>,
+        tag_map: &HashMap<String, String>,
+    ) {
+        let mut tags_to_add: Vec<FilterExpressionInner> = Vec::new();
+
+        for expr in segment.iter() {
+            // Bei NOT: die innere Expression betrachten
+            let inner = match expr {
+                FilterExpressionInner::Not { child } => child.as_ref(),
+                other => other,
+            };
+
+            if let Some(key) = Self::expression_key(inner) {
+                if let Some(tag_value) = tag_map.get(&key[0]) {
+                    let tag_expr = if tag_value.contains(':') {
+                        let parts: Vec<&str> = tag_value.splitn(2, ':').collect();
+                        let tag_key = parts[0].split('.').map(String::from).collect::<Vec<_>>();
+                        FilterExpressionInner::String {
+                            key: tag_key,
+                            expected: parts[1].to_string(),
+                        }
+                    } else {
+                        FilterExpressionInner::Exists {
+                            key: vec![tag_value.clone()],
+                        }
+                    };
+                    if !segment.contains(&tag_expr) {
+                        tags_to_add.push(tag_expr);
+                    }
+                }
+            }
+        }
+
+        // Tags vorne einfügen (in umgekehrter Reihenfolge, damit Ordnung stimmt)
+        for tag in tags_to_add.into_iter().rev() {
+            segment.insert(0, tag);
+        }
+    }
+
+    fn expression_key(expr: &FilterExpressionInner) -> Option<&Vec<String>> {
+        match expr {
+            FilterExpressionInner::String { key, .. }
+            | FilterExpressionInner::Wildcard { key, .. }
+            | FilterExpressionInner::Sigma { key, .. }
+            | FilterExpressionInner::Integer { key, .. }
+            | FilterExpressionInner::Float { key, .. }
+            | FilterExpressionInner::IntegerRange { key, .. }
+            | FilterExpressionInner::FloatRange { key, .. }
+            | FilterExpressionInner::StringRange { key, .. }
+            | FilterExpressionInner::Regex { key, .. }
+            | FilterExpressionInner::Exists { key }
+            | FilterExpressionInner::Null { key } => Some(key),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+
+    #[test]
+    fn adds_tag_to_matching_segment() {
+        let mut segments = vec![
+            vec![FilterExpressionInner::String {
+                key: vec!["field".into()],
+                expected: "val".into(),
+            }],
+        ];
+        let mut tag_map = HashMap::new();
+        tag_map.insert("field".into(), "check-tag".into());
+
+        RuleTaggerInner::add_tags(&mut segments, &tag_map);
+
+        assert_eq!(segments[0].len(), 2);
+        assert!(matches!(&segments[0][0],
+            FilterExpressionInner::Exists { key } if key == &vec!["check-tag".to_string()]
+        ));
+    }
+
+    #[test]
+    fn no_tag_map_no_change() {
+        let mut segments = vec![
+            vec![FilterExpressionInner::Exists { key: vec!["a".into()] }],
+        ];
+        RuleTaggerInner::add_tags(&mut segments, &HashMap::new());
+        assert_eq!(segments[0].len(), 1);
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/parser.rs`
+
+```rust
+use std::collections::HashMap;
+use crate::filter::expression::FilterExpressionInner;
+use super::demorgan::DeMorganResolverInner;
+use super::segmenter::RuleSegmenterInner;
+use super::sorter::RuleSorterInner;
+use super::tagger::RuleTaggerInner;
+
+/// Orchestriert die gesamte Rule-Parsing-Pipeline.
+/// Alle Schritte arbeiten auf FilterExpressionInner (kein PyO3).
+pub struct RuleParserInner;
+
+impl RuleParserInner {
+    /// Parst eine `FilterExpressionInner` in DNF-Segmente.
+    ///
+    /// Pipeline:
+    /// 1. DeMorganResolver — löst NOT (A AND B) → (NOT A) OR (NOT B) auf
+    /// 2. RuleSegmenter — konvertiert zu DNF-Liste
+    /// 3. RuleSorter — sortiert Segmente nach Priorität
+    /// 4. AddExistsFilter — fügt Exists-Checks vor jedem Key-basierten Ausdruck hinzu
+    /// 5. RuleTagger — fügt Tag-Checks hinzu
+    pub fn parse(
+        expr: &FilterExpressionInner,
+        priority_dict: &HashMap<String, String>,
+        tag_map: &HashMap<String, String>,
+    ) -> Vec<Vec<FilterExpressionInner>> {
+        // 1. DeMorgan
+        let resolved = DeMorganResolverInner::resolve(expr);
+
+        // 2. DNF (RuleSegmenter)
+        let mut segments = RuleSegmenterInner::segment_into_dnf(&resolved);
+
+        // 3. Sortieren
+        RuleSorterInner::sort_segments(&mut segments, priority_dict);
+
+        // 4. Exists-Filter hinzufügen
+        Self::add_exists_filters(&mut segments);
+
+        // 5. Tags hinzufügen
+        RuleTaggerInner::add_tags(&mut segments, tag_map);
+
+        segments
+    }
+
+    /// Fügt vor jedem Key-basierten Ausdruck (außer Exists/Not/Always) einen
+    /// `Exists(key)`-Check ein, um frühzeitig bei fehlenden Feldern abbrechen zu können.
+    fn add_exists_filters(segments: &mut Vec<Vec<FilterExpressionInner>>) {
+        for segment in segments.iter_mut() {
+            let mut i = 0;
+            let mut added = 0;
+            let original_len = segment.len();
+            while i < original_len {
+                let expr = &segment[i + added];
+                match expr {
+                    FilterExpressionInner::Exists { .. }
+                    | FilterExpressionInner::Not { .. }
+                    | FilterExpressionInner::Always { .. } => {
+                        i += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                // Key extrahieren
+                let key = Self::extract_key(expr);
+                if let Some(k) = key {
+                    let exists = FilterExpressionInner::Exists { key: k.clone() };
+                    if !segment[..i + added].contains(&exists) {
+                        segment.insert(i + added, exists);
+                        added += 1;
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn extract_key(expr: &FilterExpressionInner) -> Option<&Vec<String>> {
+        match expr {
+            FilterExpressionInner::String { key, .. }
+            | FilterExpressionInner::Wildcard { key, .. }
+            | FilterExpressionInner::Sigma { key, .. }
+            | FilterExpressionInner::Integer { key, .. }
+            | FilterExpressionInner::Float { key, .. }
+            | FilterExpressionInner::IntegerRange { key, .. }
+            | FilterExpressionInner::FloatRange { key, .. }
+            | FilterExpressionInner::StringRange { key, .. }
+            | FilterExpressionInner::Regex { key, .. }
+            | FilterExpressionInner::Null { key } => Some(key),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::expression::FilterExpressionInner;
+
+    #[test]
+    fn full_pipeline_simple_string() {
+        let expr = FilterExpressionInner::String {
+            key: vec!["field".into()],
+            expected: "val".into(),
+        };
+        let priority = HashMap::new();
+        let tag_map = HashMap::new();
+        let result = RuleParserInner::parse(&expr, &priority, &tag_map);
+        assert_eq!(result.len(), 1);
+        // Sollte 2 haben: Exists + String
+        assert_eq!(result[0].len(), 2);
+        assert!(matches!(&result[0][0], FilterExpressionInner::Exists { .. }));
+        assert!(matches!(&result[0][1], FilterExpressionInner::String { .. }));
+    }
+
+    #[test]
+    fn full_pipeline_or() {
+        let expr = FilterExpressionInner::Or {
+            children: vec![
+                FilterExpressionInner::String {
+                    key: vec!["a".into()],
+                    expected: "1".into(),
+                },
+                FilterExpressionInner::String {
+                    key: vec!["b".into()],
+                    expected: "2".into(),
+                },
+            ],
+        };
+        let priority = HashMap::new();
+        let tag_map = HashMap::new();
+        let result = RuleParserInner::parse(&expr, &priority, &tag_map);
+        assert_eq!(result.len(), 2);
+        for segment in &result {
+            assert_eq!(segment.len(), 2); // Exists + String
+            assert!(matches!(&segment[0], FilterExpressionInner::Exists { .. }));
+        }
+    }
+}
+```
+
+#### `crates/logprep-core/src/rule/mod.rs` (Update)
+
+```rust
+pub mod demorgan;
+pub mod node;
+pub mod parser;
+pub mod segmenter;
+pub mod sorter;
+pub mod tagger;
+pub mod tree;
+
+use pyo3::prelude::*;
+
+#[pymodule]
+pub fn rule(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Schritt 3c: PyRuleTree wird hier registriert
+    Ok(())
+}
+```
+
+**Verifizierung:**
+```bash
+cargo test -p logprep-core
+# Alle 50+ Rust-Tests für die Rule-Pipeline
+```
+
+---
+
+### Schritt 3c: PyO3-Adapter (PyRuleTree) + Python Thin Wrapper
+
+**Ziel**: `PyRuleTree` als PyO3-Klasse, die `TreeInner` wrappt. Dünner Python-`RuleTree`-Wrapper, der Rule-IDs auf Python-`Rule`-Objekte mapped.
+
+#### Rust-Seite: `PyRuleTree` in `crates/logprep-core/src/rule/mod.rs`
+
+```rust
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+use std::collections::HashMap;
+
+use crate::filter::expression::{FilterExpressionInner, pydict_to_json};
+
+use super::tree::TreeInner;
+use super::parser::RuleParserInner;
+use super::node::NodeInner; // für Debug
+
+/// Python-seitiger RuleTree. Wrapper um TreeInner.
+/// Übersetzt zwischen Python-Typen und Rust-Typen.
+#[pyclass]
+pub struct PyRuleTree {
+    inner: TreeInner,
+}
+
+#[pymethods]
+impl PyRuleTree {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: TreeInner::new(),
+        }
+    }
+
+    /// Fügt eine Rule hinzu.
+    /// `rule_id`: u64 — ID für die Python-Seite zum Zurückmappen
+    /// `segments`: Liste von DNF-Segmenten, jedes eine Liste von dict-Repräsentationen
+    #[pyo3(signature = (rule_id, segments))]
+    fn add_rule(&mut self, rule_id: u64, segments: &Bound<'_, PyList>) -> PyResult<()> {
+        for segment in segments.iter() {
+            let segment_list = segment.downcast::<PyList>()?;
+            let mut parsed = Vec::new();
+            for item in segment_list.iter() {
+                // Jedes Item ist ein PyFilterExpression — extrahiere das Inner
+                if let Ok(py_expr) = item.extract::<PyFilterExpression>() {
+                    parsed.push(py_expr.inner);
+                } else {
+                    // Fallback: über Python-Objekt-Attribute
+                    let inner = FilterExpressionInner::from_py_object(&item)?;
+                    parsed.push(inner);
+                }
+            }
+            self.inner.add_rule(&parsed, rule_id);
+        }
+        Ok(())
+    }
+
+    /// Findet alle Rule-IDs die auf ein Event matchen.
+    fn get_matching_rules(&self, py: Python, event: &Bound<'_, PyDict>) -> Vec<u64> {
+        match pydict_to_json(event) {
+            Ok(json_doc) => self.inner.get_matching_rules(&json_doc),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Parst eine FilterExpressionInner (als dict-repräsentiert) in DNF-Segmente.
+    #[pyo3(signature = (filter_expr_inner, priority_dict=None, tag_map=None))]
+    fn parse_rule(
+        &self,
+        filter_expr_inner: &Bound<'_, PyAny>,
+        priority_dict: Option<HashMap<String, String>>,
+        tag_map: Option<HashMap<String, String>>,
+    ) -> PyResult<PyObject> {
+        let inner = FilterExpressionInner::from_py_object(filter_expr_inner)?;
+        let priority = priority_dict.unwrap_or_default();
+        let tags = tag_map.unwrap_or_default();
+        let segments = RuleParserInner::parse(&inner, &priority, &tags);
+
+        // In Python-Liste konvertieren
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+        let result = PyList::empty(py);
+        for segment in &segments {
+            let seg_list = PyList::empty(py);
+            for expr in segment {
+                let py_expr = PyFilterExpression { inner: expr.clone() };
+                seg_list.append(py_expr.into_py(py))?;
+            }
+            result.append(seg_list)?;
+        }
+        Ok(result.into())
+    }
+
+    fn rule_count(&self) -> usize {
+        self.inner.rule_count()
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+}
+```
+
+**Hinweis**: `FilterExpressionInner::from_py_object` und `pydict_to_json` müssen in `expression.rs` als `pub` exportiert werden. `pydict_to_json` existiert bereits in Phase 2 (expression.rs), muss nur `pub` werden.
+
+**Export in `crates/logprep-core/src/filter/expression.rs`**:
+```diff
+-pub(crate) fn pydict_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
++pub fn pydict_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+```
+
+**`FilterExpressionInner::from_py_object`** — neue Methode in `expression.rs`:
+```rust
+impl FilterExpressionInner {
+    /// Extrahiert ein FilterExpressionInner aus einem PyFilterExpression oder
+    /// einem Python-Dict mit "expression_type" und Attributen.
+    pub fn from_py_object(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // Wenn es bereits ein PyFilterExpression ist
+        if let Ok(py_expr) = obj.extract::<PyFilterExpression>() {
+            return Ok(py_expr.inner);
+        }
+        // Fallback: expression_type-string auswerten
+        let expr_type: String = obj.getattr("expression_type")?.extract()?;
+        match expr_type.as_str() {
+            "Always" => {
+                let value: bool = obj.getattr("value")?.extract()?;
+                Ok(FilterExpressionInner::Always { value })
+            }
+            "Not" => {
+                let children = obj.getattr("children")?;
+                let child_list = children.downcast::<PyList>()?;
+                let child = Self::from_py_object(&child_list.get_item(0)?)?;
+                Ok(FilterExpressionInner::Not { child: Box::new(child) })
+            }
+            "And" => {
+                let children = Self::extract_children(obj)?;
+                Ok(FilterExpressionInner::And { children })
+            }
+            "Or" => {
+                let children = Self::extract_children(obj)?;
+                Ok(FilterExpressionInner::Or { children })
+            }
+            "StringFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let expected: String = obj.getattr("expected_value")?.extract()?;
+                Ok(FilterExpressionInner::String { key, expected })
+            }
+            "Exists" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                Ok(FilterExpressionInner::Exists { key })
+            }
+            // ... weitere 11 Varianten analog ...
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Unknown expression_type: {}", expr_type),
+            )),
+        }
+    }
+
+    fn extract_children(obj: &Bound<'_, PyAny>) -> PyResult<Vec<FilterExpressionInner>> {
+        let children = obj.getattr("children")?;
+        let child_list = children.downcast::<PyList>()?;
+        let mut result = Vec::new();
+        for item in child_list.iter() {
+            result.push(Self::from_py_object(&item)?);
+        }
+        Ok(result)
+    }
+}
+```
+
+**`PyFilterExpression` muss `pub` Felder haben** (oder einen Getter für `inner`):
+```diff
+ #[pyclass]
+ #[derive(Clone)]
+ pub struct PyFilterExpression {
+-    inner: FilterExpressionInner,
++    pub inner: FilterExpressionInner,
+ }
+```
+
+#### Python-Seite: Neuer dünner `RuleTree`-Wrapper
+
+**Neue Datei:** `logprep/framework/rule_tree/rule_tree.py` (ersetzt alte Implementierung)
 
 ```python
-# logprep/ng/framework/rule_tree/
-from logprep._rust.rule import RuleTree, Rule
+"""RuleTree — thin wrapper around Rust PyRuleTree.
+
+Der Rust-Core arbeitet mit FilterExpressionInner + u64 Rule-IDs.
+Dieser Wrapper mapped Rule-IDs auf Python Rule-Objekte.
+"""
+
+from logging import getLogger
+from typing import TYPE_CHECKING
+
+from logprep._rust.rule import PyRuleTree
+from logprep.filter.expression.filter_expression import FilterExpression
+from logprep.util.helper import deduplicate_with_order
+
+if TYPE_CHECKING:
+    from logprep.processor.base.rule import Rule
+
+logger = getLogger("RuleTree")
+
+
+class RuleTree:
+    """Rule tree that maps between Python Rule objects and Rust rule IDs."""
+
+    def __init__(self, config: str | None = None):
+        self._rule_id_to_rule: dict[int, "Rule"] = {}
+        self._rule_to_id: dict[int, int] = {}
+        self._inner = PyRuleTree()
+        self._next_rule_id = 0
+        self.tree_config = RuleTree.Config() if config is None else self._load_config(config)
+
+    class Config:
+        def __init__(self, priority_dict: dict | None = None, tag_map: dict | None = None):
+            self.priority_dict = priority_dict or {}
+            self.tag_map = tag_map or {}
+
+    def _load_config(self, config_path: str) -> "Config":
+        from logprep.util import getter
+        config_data = getter.GetterFactory.from_string(config_path).get_dict()
+        return RuleTree.Config(**config_data)
+
+    @property
+    def number_of_rules(self) -> int:
+        return len(self._rule_id_to_rule)
+
+    def add_rule(self, rule: "Rule"):
+        """Fügt eine Rule in den RuleTree ein."""
+        try:
+            # Parse rule filter in Rust → DNF segments
+            segments = self._inner.parse_rule(
+                rule.filter,
+                self.tree_config.priority_dict,
+                self.tree_config.tag_map,
+            )
+        except Exception as error:
+            logger.warning(
+                'Error parsing rule "%s.yml": %s: %s. Ignore and continue.',
+                getattr(rule, "file_name", None),
+                type(error).__name__,
+                error,
+            )
+            return
+
+        rule_id = self._next_rule_id
+        self._next_rule_id += 1
+
+        # Add segments to Rust tree
+        self._inner.add_rule(rule_id, segments)
+
+        # Update mappings
+        self._rule_id_to_rule[rule_id] = rule
+        self._rule_to_id[id(rule)] = rule_id
+
+    def get_matching_rules(self, event: dict) -> list["Rule"]:
+        """Holt alle Rule-IDs die matchen, mapped zurück zu Rule-Objekten."""
+        rule_ids = self._inner.get_matching_rules(event)
+        return deduplicate_with_order([
+            self._rule_id_to_rule[rid] for rid in rule_ids
+            if rid in self._rule_id_to_rule
+        ])
+
+    def get_rule_id(self, rule: "Rule") -> int | None:
+        return self._rule_to_id.get(id(rule))
+
+    @property
+    def rules(self) -> list["Rule"]:
+        return list(self._rule_id_to_rule.values())
+
+    @property
+    def root(self):
+        return None  # backward compat — wird in Schritt 3d entfernt
+
+    def print(self, *_):
+        """Debug-print — delegiert an Rust."""
+        pass  # Kann in Rust implementiert werden
+
+    def get_size(self) -> int:
+        return self._inner.size()
 ```
 
-Der gesamte `logprep/ng/framework/rule_tree/` Python-Code wird durch die Rust-Implementierung ersetzt.
+**Registrierung in `crates/logprep-core/src/lib.rs`:**
+```diff
+  use pyo3::prelude::*;
 
-### Verifizierung
+  pub mod field;
+  pub mod filter;
++ pub mod rule;
 
+  #[pymodule]
+  fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+      // Rule (Phase 3)
++     rule::register(m)?;
+
+      // Filter (Phase 2)
+      filter::register(m)?;
+      // ...
+  }
+```
+
+**`crates/logprep-core/src/rule/mod.rs` (final):**
+```rust
+pub mod demorgan;
+pub mod node;
+pub mod parser;
+pub mod segmenter;
+pub mod sorter;
+pub mod tagger;
+pub mod tree;
+
+use pyo3::prelude::*;
+
+use self::tree::TreeInner;
+
+#[pyclass]
+pub struct PyRuleTree {
+    inner: TreeInner,
+}
+
+// ... (siehe oben, alle pymethods) ...
+
+/// Registriert das rule-Submodul im PyO3-Modul.
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyRuleTree>()?;
+    Ok(())
+}
+```
+
+**Verifizierung:**
+```bash
+cargo test -p logprep-core
+uv run pytest tests/unit/framework/rule_tree/test_rule_tree.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_node.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_rule_parser.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_demorgan_resolver.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_rule_segmenter.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_rule_sorter.py -vvv
+uv run pytest tests/unit/framework/rule_tree/test_rule_tagger.py -vvv
+```
+
+---
+
+### Schritt 3d: Alten Python-Code entfernen + Phase-2-Wrapper-Analyse
+
+**Ziel**: Alle 7 alten Python-Dateien in `logprep/framework/rule_tree/` löschen (bis auf die neue `rule_tree.py`). Phase-2-Wrapper auf Entbehrlichkeit prüfen.
+
+#### Gelöschte Python-Dateien
+
+| Datei | Aktion | Ersatz |
+|---|---|---|
+| `logprep/framework/rule_tree/node.py` | Löschen (105 Zeilen) | `crates/logprep-core/src/rule/node.rs` |
+| `logprep/framework/rule_tree/demorgan_resolver.py` | Löschen (70 Zeilen) | `crates/logprep-core/src/rule/demorgan.rs` |
+| `logprep/framework/rule_tree/rule_segmenter.py` | Löschen (268 Zeilen) | `crates/logprep-core/src/rule/segmenter.rs` |
+| `logprep/framework/rule_tree/rule_sorter.py` | Löschen (97 Zeilen) | `crates/logprep-core/src/rule/sorter.rs` |
+| `logprep/framework/rule_tree/rule_tagger.py` | Löschen (122 Zeilen) | `crates/logprep-core/src/rule/tagger.rs` |
+| `logprep/framework/rule_tree/rule_parser.py` | Löschen (134 Zeilen) | `crates/logprep-core/src/rule/parser.rs` |
+| `logprep/framework/rule_tree/rule_tree.py` | **Ersetzen** durch Thin Wrapper (Schritt 3c) | — |
+
+#### Analyse: Können Phase-2-Wrapper nach Phase 3 entfernt werden?
+
+Nach Phase 3 importieren folgende Python-Dateien noch aus `logprep/filter/expression/`:
+
+| Datei | Importiert | Benötigt? |
+|---|---|---|
+| `logprep/filter/lucene_filter.py` | `Always`, `And`, `Exists`, `FilterExpression`, `FloatRangeFilterExpression`, `IntegerRangeFilterExpression`, `Not`, `Null`, `Or`, `RegExFilterExpression`, `SigmaFilterExpression`, `StringFilterExpression`, `StringRangeFilterExpression`, `RangeBoundary`, `LuceneTransformer` (alte Klasse) | Nach Phase 2d-Cleanup: `LuceneTransformer` muss gelöscht werden. Die Factory-Importe in `LuceneFilter` werden durch Rust `parse_lucene_query` ersetzt — aber die alte `LuceneTransformer`-Klasse importiert sie noch. → **Phase-2d muss vor Phase 3d abgeschlossen sein** |
+| `logprep/processor/base/rule.py` | `FilterExpression` (Typ-Annotation) | Ja — weiterhin benötigt für Typ-Hinweise |
+| `logprep/framework/rule_tree/rule_tree.py` (neu) | `FilterExpression` (wird nur noch für Typ-Hinweise gebraucht) | Kann durch `Any` ersetzt werden → dann entfernbar |
+| Tests (10+ Dateien) | Diverse Factory-Funktionen + Exceptions | Factory-Aliase + Exceptions müssen erhalten bleiben |
+
+**Fazit: Nach Phase 3 können folgende Phase-2-Bestandteile entfernt/vereinfacht werden:**
+
+| Komponente | Status | Begründung |
+|---|---|---|
+| `LuceneTransformer` (in `lucene_filter.py`) | **Entfernbar** | Wird nur noch von alten Tests referenziert. Die `LuceneFilter.create()` delegiert bereits an Rust. |
+| `CompoundFilterExpression` (Stub) | **Entfernbar** | Wurde nur für `isinstance` in alten RuleTree-Komponenten verwendet — diese sind jetzt in Rust. |
+| `KeyBasedFilterExpression` (Stub) | **Entfernbar** | s.o. |
+| `RangeBoundary` (Stub) | **Entfernbar** | s.o. |
+| `_get_value` (in `expression/__init__`) | **Entfernbar** | Wurde von Node/FilterExpression verwendet — beides jetzt in Rust. |
+| Factory-Funktionen (`Always`, `And`, `Or`, etc.) | **Müssen bleiben** | Werden von Tests und `rule.py` (`_create_filter_expression`) importiert. |
+| `FilterExpression` (Typ-Alias für `PyFilterExpression`) | **Muss bleiben** | Wird von `rule.py` und Tests als Typ verwendet. |
+| `FilterExpressionError` | **Muss bleiben** | Wird als Python-Exception geworfen. |
+| `KeyDoesNotExistError` | **Muss bleiben** | Wird von `util/event.py` und Tests importiert. |
+
+**Phase-2-Wrapper-Abbau-Plan (nach Phase 3, als separater Schritt oder in Phase 2d nachgeholt):**
+
+```python
+# lucene_filter.py — LuceneTransformer entfernen, nur noch:
+from logprep._rust import parse_lucene_query
+
+class LuceneFilter:
+    @staticmethod
+    def create(query_string, special_fields=None):
+        try:
+            return parse_lucene_query(query_string, special_fields)
+        except Exception as error:
+            raise LuceneFilterError(...)
+
+# expression/__init__.py — Stubs entfernen:
+# Aus:
+class KeyBasedFilterExpression: ...
+class CompoundFilterExpression: ...
+RangeBoundary = type(...)
+def _get_value(key, document): ...
+FilterExpression._get_value = staticmethod(_get_value)
+
+# Entfernen — nicht mehr referenziert
+```
+
+#### Testanpassungen
+
+Die Python-Tests in `tests/unit/framework/rule_tree/` müssen **nicht gelöscht**, sondern angepasst werden:
+- Tests, die `Node`, `RuleParser`, `DeMorganResolver`, `RuleSegmenter`, `RuleSorter`, `RuleTagger` direkt importieren → werden auf die Rust-Implementierung umgestellt (via `RuleTree`-Wrapper)
+- `test_rule_tree.py` → testet den neuen Thin Wrapper
+- `test_node.py` → kann gelöscht werden (Node existiert nur noch in Rust)
+- Rest → testen indirekt über `RuleTree`
+
+**Einfachste Strategie**: Die Tests laufen über den neuen `RuleTree`-Wrapper und testen damit:
+- Rule hinzufügen (`add_rule`)
+- Rule matchen (`get_matching_rules`)
+- DeMorgan-Verhalten (indirekt über komplexe Filter)
+- Segmentierung (indirekt)
+- Priorisierung (indirekt über `tree_config`)
+
+Die Rust-Unit-Tests in jedem Modul decken die Einzelfunktionen ab.
+
+**Verifizierung:**
 ```bash
 cargo test -p logprep-core
 uv run pytest tests/unit/framework/rule_tree/ -vvv
+uv run pytest tests/unit/filter/ -vvv
+uv run pytest tests/unit/processor/ -vvv
+uv run pytest ./tests --cov=logprep --cov-report=xml -vvv
+pre-commit run --all-files
 ```
 
-### Performance-Test
+---
+
+### Zusammenfassung Phase 3: Reihenfolge der Commits
+
+| # | Beschreibung | Betrifft | Risiko |
+|---|---|---|---|
+| 3a | NodeInner + TreeInner (Pure Rust Core) | `crates/logprep-core/src/rule/{mod,node,tree}.rs` | Niedrig — nur Rust-Code, kein Python-Einfluss |
+| 3b | Rule-Parsing-Pipeline (DeMorgan, Segmenter, Sorter, Tagger, Parser in Rust) | `crates/logprep-core/src/rule/{demorgan,segmenter,sorter,tagger,parser}.rs` | Niedrig — pure Rust, testbar mit `cargo test` |
+| 3c | PyO3-Adapter (`PyRuleTree`) + Python-Thin-Wrapper (`rule_tree.py`) | `crates/logprep-core/src/rule/mod.rs`, `logprep/framework/rule_tree/rule_tree.py`, `crates/logprep-core/src/lib.rs` | **Hoch** — API-Vertrag zwischen Python und Rust muss stimmen |
+| 3d | Alte Python-Dateien löschen + Phase-2-Wrapper-Abbau + Benchmark | `logprep/framework/rule_tree/{node,demorgan_resolver,rule_segmenter,rule_sorter,rule_tagger,rule_parser}.py`, Test-Anpassungen | Mittel — Importe müssen korrekt aktualisiert werden |
+
+**Jeder Commit** muss:
+1. Alle bestehenden Tests bestehen (`uv run pytest ./tests -vvv`)
+2. `pre-commit run --all-files` bestehen
+3. `cargo test -p logprep-core` bestehen
+4. Performance-Test durchführen (`./benchmarks`)
+
+---
+
+### Performance-Test nach Phase 3
+
+Der Benchmark verwendet die existierende Infrastruktur unter `./benchmarks`:
 
 ```bash
-uv run python ./benchmarks/benchmark_rule_matching.py --baseline benchmarks/phase2.json \
-  --output benchmarks/phase3.json
+# 1. Benchmark für Phase 3 (End-to-End, benötigt Docker-Kafka + OpenSearch)
+uv run python benchmarks/run_phase_benchmark.py --phase 3 --runs 30 30 30
+
+# 2. Vergleich mit Phase 2 (Baseline)
+uv run python benchmarks/compare_phases.py --phase-baseline 2 --phase-current 3
+
+# 3. Ergebnis in BENCHMARK_HISTORY.md eintragen
 ```
+
+**Erwarteter Impact**: 
+- **Rule-Matching**: Die DFS-Traversierung des RuleTree läuft komplett in Rust auf `serde_json::Value` — kein Python-Objekt-Overhead mehr für `Node.does_match()`. Jeder `child.does_match(event)`-Aufruf war vorher ein Python-Methodenaufruf, der `KeyDoesNotExistError` abfängt — jetzt ist es ein direkter Rust-Enum-Match.
+- **Rule-Parsing** (Startup): DeMorgan, DNF-Konvertierung, und Tagging laufen in Rust ohne GIL-Overhead. Relevant für Konfigurationen mit tausenden Rules.
+- **Datenkonvertierung**: Einmalig pro Event muss das Python-Dict in `serde_json::Value` konvertiert werden (beim Aufruf von `PyRuleTree::get_matching_rules`). Dies ist O(n) für n Felder und existiert bereits in Phase 2 für `FilterExpression.matches()`.
+- **Gesamtdurchsatz**: Erwartete Verbesserung von 5-15% durch Eliminierung des Python-Overheads im Hot-Path (jeder Event durchläuft den RuleTree).
+
+**Erwartete Veränderung der Benchmark-Kennzahlen:**
+
+| Metrik | Phase 2 (aktuell) | Phase 3 (erwartet) | Δ |
+|---|---|---|---|
+| Throughput (weighted) | ~3.355 docs/s | ~3.500–3.700 docs/s | +5–10% |
+| Std Dev | ~32 docs/s | Niedriger | Stabileres Matching |
+| Total Processed | ~302.000 | ~315.000–333.000 | +5–10% |
 
 ---
 
