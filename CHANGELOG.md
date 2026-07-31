@@ -4,6 +4,7 @@
 ### Features
 
 ### Improvements
+* migration: re-plan phase 4 and insert phase 3.5 (ProcessorCore orchestration) in `MIGRATION_PLAN.md` so that the ng ABC event-processing orchestration moves to Rust before per-processor migration; retain Python `Rule` attrs classes as external introspection API; define `matched_rule_ids` outcome as the seam for the later Rust metrics migration
 
 ### Bugfix
 

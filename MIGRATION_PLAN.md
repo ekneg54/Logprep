@@ -92,62 +92,208 @@ Die Applikation muss zu jedem Zeitpunkt weiter ausführbar bleiben.
 
 ---
 
-## Phase 4: Processor-Core (Einfache Processor)
+## Phase 3.5: Processor-Orchestrierung (Base-ABC) in Rust
 
-**Ziel**: Jeder einfache, rechenintensive Processor wird — inklusive seiner gesamten Rule-Definition, Rule-Validierung, RuleTree-Anbindung und Rule-Anwendung — **komplett in Rust** implementiert. Der Python-Layer für `logprep/ng/processor/<name>/processor.py` ist ein **dünner API-Adapter ohne Event-Verarbeitung**: er lädt Regel-Dicts, reicht sie an die Rust-Implementierung weiter und ruft deren `process(event)` auf. **Kein einziger Prozessor verarbeitet nach Phase 4 noch Events in Python**. Die `rule_tree` wird ausschließlich **aus Rust heraus** konsumiert; Python-Code ruft an keiner Stelle mehr `tree.get_matching_rules(...)` auf. Sämtliche externen Python-Bibliotheken der neun priorisierten Prozessoren (`pyparsing`, `msgspec`, `base64`, Python-`re`, `attrs`, `dataclasses`, `functools.partial`, `functools.cached_property`, `timeout`-Decorator) werden durch Rust-Crates oder direkt in Rust geschriebenen Code ersetzt. Die in Phase 1 migrierten Helper (`pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, …) werden in Phase 4 wiederverwendet, nicht neu implementiert.
+**Ziel**: Die gesamte Event-Verarbeitungs-Orchestrierung aus `logprep/ng/abc/processor.py` (`_process_rule_tree`, `_process_rule_tree_multiple_times`, `_apply_rules_wrapper`, `_handle_warning_error`, `_has_missing_values`, `_write_target_field`, `delete_source_fields`-Aufräumen, `apply_multiple_times`-Loop, Filter-Matching, Metrik-Zählung der getroffenen Rules) wird in einen Rust-`ProcessorCore` migriert. **Jeder** Processor in ng/ läuft danach intern über diesen Rust-Kern — auch solche, deren `_apply_rules`-Logik noch in Python steht (via PyO3-Callback). Damit ist die Voraussetzung für Leitanforderung 1 (intern nur noch Rust) bereits nach Phase 3.5 erfüllt, unabhängig vom Fortschritt der per-Prozessor-Migration in Phase 4.
+
+**Begründung**: Phase 3 migriert `RuleTree` + Rule-Parsing. Phase 4 migriert 9 der ~30 Prozessoren. Würde die Orchestrierung bis Phase 4 in Python verbleiben, müssten die Phase-4-Prozessoren den `_process_rule_tree`-Pfad der ABC旁路ieren (`async def process` überschreiben), während die übrigen ~21 Prozessoren weiterhin komplett in Python über die ABC laufen. Es entstünden zwei inkonsistente Ausführungspfade, und die Anforderung „intern nur noch Rust" wäre für un-migrierte Prozessoren verletzt. Phase 3.5 zieht die gemeinsame Orchestrierung vor die per-Prozessor-Migration und schafft damit einen einheitlichen Ausführungspfad: den Rust-`ProcessorCore` mit optionalem Python-Callback für un-migrierte Rules.
+
+**Leitprinzip (verbindlich)**: Rust liefert pro `process()` eine outcome-Struktur mit den **getroffenen Rule-IDs** (`matched_rule_ids`), den aufgetretenen Warnings und Fehlern. Python konsumiert ausschließlich diesen Outcome; **kein** Python-Code ruft nach Phase 3.5 noch `self._rule_tree.get_matching_rules(...)` auf. Der `matched_rule_ids`-Vertrag ist der definierte Seam für die spätere Rust-Metrics-Migration (Anforderung 3): dann übernimmt ein Rust-Metrics-Registry die Zähler, und `Rule.Metrics` wird zum dünnen PyO3-Blick darauf. Bis dahin bleibt `Rule.Metrics` die Source of Truth; Python pflegt die Zähler aus `matched_rule_ids` nach.
+
+### Rust-Modulstruktur
+
+```
+crates/logprep-core/src/
+├── processor/
+│   ├── mod.rs                  # PyO3-Registration, re-exports
+│   ├── core.rs                 # ProcessorCore inkl. ProzessOutcome + Callback-Path  (NEU in 3.5)
+│   └── outcome.rs              # ProcessOutcome, ProcessingWarning-Rückgabetyp        (NEU in 3.5)
+```
+
+### Datenmodell (Rust)
+
+```rust
+// crates/logprep-core/src/processor/outcome.rs
+#[pyclass]
+pub struct ProcessOutcome {
+    #[pyo3(get)]
+    pub matched_rule_ids: Vec<u64>,       // von TreeInner geliefert
+    // bei with_timing=true später: pub timings: HashMap<u64, f64>
+    pub warnings: Vec<PyProcessingWarning>,
+    pub errors: Vec<PyProcessingError>,
+    #[pyo3(get)]
+    pub delete_source_fields: Vec<(u64, Vec<String>)>,  // (rule_id, source_fields) wie processor.py:192-196
+}
+
+// crates/logprep-core/src/processor/core.rs
+pub struct ProcessorCore {
+    name: String,
+    tree: TreeInner,
+    apply_multiple_times: bool,
+    rule_id_to_rule: HashMap<u64, PyObject>,   // Python-Rule-Referenz (für Metrik-Inkrement via Outcome)
+    rule_specs: HashMap<u64, Box<dyn RuleSpec>>,  // belegt erst in Phase 4 (4b)
+}
+
+impl ProcessorCore {
+    pub fn add_rule(&mut self, rule_id: u64, filter: &FilterExpressionInner,
+                    segments: Vec<Vec<FilterExpressionInner>>,
+                    py_rule: PyObject) -> Result<(), String> {
+        self.tree.add_rule(rule_id, &segments);
+        self.rule_id_to_rule.insert(rule_id, py_rule);
+        Ok(())
+    }
+
+    pub fn process(&self, py: Python, event: &Bound<'_, PyDict>,
+                   apply_hook: Option<PyObject>) -> PyResult<ProcessOutcome> {
+        let mut value = pydict_to_json(event)?;
+        let mut matched = self.tree.get_matching_rules(&value);
+        if self.apply_multiple_times { matched = self.dedup_multiple(&value, matched); }
+        let mut outcome = ProcessOutcome::default();
+        for rule_id in &matched {
+            if let Some(spec) = self.rule_specs.get(rule_id) {
+                spec.apply(&mut value).map_err(...)?;           // Phase 4: pure Rust
+            } else if let Some(ref hook) = apply_hook {
+                hook.call(py, (rule_id, &mut value, ...))?;     // Phase 3.5: Python-Callback
+            }
+            // delete_source_fields, warning-tag-merge, data_error-skip — in Rust
+        }
+        json_to_pydict(py, event, &value)?;
+        outcome.matched_rule_ids = matched;
+        Ok(outcome)
+    }
+}
+
+#[pyclass]
+pub struct PyProcessorCore { inner: ProcessorCore }
+```
+
+`RuleSpec`-Trait wird bereits hier deklariert (ohne Implementierungen), damit `rule_specs` existiert — belegt erst in Phase 4 Subphase 4b:
+```rust
+pub trait RuleSpec: Send + Sync {
+    fn apply(&self, event: &mut Value) -> Result<(), String>;
+}
+```
+
+### Python-Adapter nach Phase 3.5
+
+```python
+# logprep/ng/abc/processor.py  —  Orchestrierung delegiert an ProcessorCore
+from logprep._rust.processor import PyProcessorCore
+
+class Processor(Component):
+    def __init__(self, name, configuration, _rust_processor_factory=None):
+        super().__init__(name, configuration)
+        self._core = PyProcessorCore(
+            name=self.name,
+            apply_multiple_times=self.config.apply_multiple_times,
+        )
+        self._rule_id_to_rule: dict[int, Rule] = {}
+        self.load_rules(rules_targets=self.config.rules)
+        self._bypass_rule_tree = bool(ENV_VARS.get("LOGPREP_BYPASS_RULE_TREE"))
+
+    def load_rules(self, rules_targets):
+        for rule in RuleLoader(rules_targets, self.name).rules:
+            self._core.add_rule(rule_id=rule._intern_id, filter=rule.filter, segments=...,
+                                  py_rule=rule)
+            self._rule_id_to_rule[rule._intern_id] = rule
+
+    async def process(self, event):
+        self._event = event
+        outcome = self._core.process(event.data, apply_hook=self._apply_rule_in_python)
+        # Metrik-Inkrement ausschließlich über outcome.matched_rule_ids (Vertrag für Anforderung 3)
+        for rid in outcome.matched_rule_ids:
+            self._rule_id_to_rule[rid].metrics.number_of_processed_events += 1
+        for warning in outcome.warnings:
+            self._event.warnings.append(warning)
+        return self._event
+
+    # Callback für noch nicht migrierte Prozessoren. Signatur kompatibel mit RuleSpec::apply.
+    def _apply_rule_in_python(self, py_rule_id, py_event, ...):
+        rule = self._rule_id_to_rule[py_rule_id]
+        self._apply_rules(py_event, rule)
+```
+
+### Warum kein旁路 der ABC
+
+In Phase 4试过 der挫败en Variante wurde `async def process` pro Processor überschrieben und der ABC `process`旁路iert. Phase 3.5 macht das unnötig: `process` bleibt in der ABC, ruft `self._core.process(...)`. Phase 4-Subphasen registrieren nur `RuleSpec`-Einträge — der ABC-Pfad bleibt für alle Prozessoren gleich.
+
+### Schritte
+
+- **3.5a — `ProcessorCore` + `ProcessOutcome` in Rust**: Pure-Rust-Orchestrierung inkl. `apply_multiple_times`-Loop (Differenz-Menge wie `processor.py:149-156`), `delete_source_fields`-Aufräumen (`processor.py:192-196`), warning-tag-merge (`_handle_warning_error:233-251`) und `data_error`-Skip (`_apply_rules_wrapper:174-180`). Nutzt `field::value::*` aus Phase 1. PyO3-Adapter `PyProcessorCore` mit `add_rule` + `process(apply_hook)`. Callback-Path via `Option<PyObject>`. 30+ Rust-Unit-Tests.
+
+- **3.5b — Python-ABC auf ProcessorCore umstellen**: `logprep/ng/abc/processor.py` auf Adapter (siehe oben) reduzieren. `_process_rule_tree`, `_process_rule_tree_multiple_times`, `_process_rule`, `_apply_rules_wrapper`, `_handle_warning_error` entfallen als Python-Methoden; ihre Logik lebt in Rust. `_apply_rules` bleibt `@abstractmethod` als Python-Callback-Implementierung. `LOGPREP_BYPASS_RULE_TREE` wird im Rust-Core respektiert.
+
+- **3.5c — Verifizierung über die gesamte Suite**: Alle ~30 Prozessoren laufen unverändert grün, da un-migrierte über den Callback-Pfad ihre `_apply_rules` ausführen. Negativkatalog-Vorprüfung: kein `tree.get_matching_rules` mehr in `ng/processor/*/processor.py`. Performance-Test gegen Phase-3-Baseline; Toleranz < 3% (Rust-Overhead durch Callback-Roundtrip ist temporär).
+
+### Akzeptanzkriterien (Phase 3.5 abgeschlossen)
+
+- [ ] `crates/logprep-core/src/processor/core.rs` mit `ProcessorCore` + `ProcessOutcome`; `rule_specs: HashMap<u64, Box<dyn RuleSpec>>` (leer bis Phase 4).
+- [ ] `logprep/ng/abc/processor.py` delegiert `process` vollständig an `PyProcessorCore`; keine `_process_rule_tree`-Methode mehr in Python.
+- [ ] Keine `*.py` unter `logprep/ng/processor/` ruft `_rule_tree.get_matching_rules(...)` auf.
+- [ ] `matched_rule_ids` ist der einzige Weg, wie Python an Rule-Metriken gelangt — dokumentierter Vertrag (Kommentar + `AGENTS.md`-Eintrag).
+- [ ] Alle ~30 Prozessoren: Unit- und Acceptance-Tests grün ohne Modifikation.
+- [ ] Performance < 3% Regression ggü. Phase-3-Baseline.
+
+---
+
+## Phase 4: Processor-RuleSpecs (Einfache Processor)
+
+**Ziel**: Die neun einfache, rechenintensive Prozessoren werden — pro Processor durch ein `RuleSpec`-Struct mit `apply(&mut Value)` — in Rust migriert. Die Orchestrierung (Matching, Warning-Handling, `delete_source_fields`, Metrik-Zählung) liegt seit Phase 3.5 im gemeinsamen `ProcessorCore`; Phase 4 belegt lediglich die `rule_specs`-Tabelle des Cores pro migriertem Processor. Sobald ein `RuleSpec`-Eintrag existiert, entfällt für diesen Processor der Python-Callback-Pfad aus 3.5. **Keine `process()`-Methode eines Phase-4-Prozessors旁路iert die ABC** — die ABC ruft weiterhin `self._core.process(...)`, der Core dispatcht an `RuleSpec::apply`. Die in Phase 1 migrierten Helper (`pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, …) werden in Phase 4 wiederverwendet, nicht neu implementiert. Sämtliche externen Python-Bibliotheken der neun priorisierten Prozessoren (`pyparsing`, `msgspec`, `base64`, Python-`re`, `dataclasses`, `functools.partial`, `functools.cached_property`, `timeout`-Decorator) werden durch Rust-Crates oder direkt in Rust geschriebenen Code ersetzt — **mit Ausnahme von `attrs`**, das an den Python-`Rule`-Klassen für die externe Introspection-API erhalten bleibt (siehe Leitprinzip 3).
 
 **Begründung**:
-- Nach Phase 1–3 ist die gesamte Filter-/Rule-Infrastruktur in Rust (`FilterExpressionInner`, `TreeInner`, `RuleParserInner`). Ein Verbleib der Processor-Logik in Python würde den `serde_json::Value` ↔ `dict`-Round-Trip pro Event und Regel erzwingen — der größte verbliebene Hot-Path-Overhead.
-- Indem die Rule-Datenstrukturen (z. B. `DropperRule`, `FieldManagerRule`) in Rust definiert und validiert werden, fällt der `attrs`-Validator-Overhead pro `add_rule` weg, und die Validierungslogik kann zwischen `add_rule` und `process` streng typisiert geteilt werden.
-- Externe Bibliotheken wie `pyparsing` (Calculator), `msgspec` (Decoder), `attrs` (alle Rule-Klassen) und `re` (Dissector/Replacer) ziehen jeweils C-Extension-Overhead, globale Locks oder großen Speicherbedarf nach sich. Rust-Äquivalente (`meval`/eigener Pratt-Parser, `serde_json`, `serde::Deserialize`, `regex`) sind bereits als Crates verfügbar oder werden in 4a direkt geschrieben.
-- Ein dünner Python-Adapter stellt sicher, dass die bestehende `ng.abc.processor.Processor`-Schnittstelle (mit `setup`, `metrics`, `process(event) -> LogEvent`) erhalten bleibt, ohne dass Logik dupliziert wird.
+- Nach Phase 3.5 läuft die Orchestrierung bereits in Rust; der verbleibende Python-Overhead pro Event ist der Callback-Roundtrip für un-migrierte Prozessoren. Phase 4 beseitigt diesen Roundtrip für die neun priorisierten Prozessoren, indem `apply` direkt in Rust läuft.
+- Indem die Rule-Datenstrukturen (z. B. `DropperRuleSpec`, `FieldManagerRuleSpec`) in Rust als `serde::Deserialize`-Structs definiert werden, fällt der Python-Validator-Overhead pro `add_rule` weg, und die Validierung kann in `RuleSpec::validate` streng typisiert zwischen `add_rule` und `apply` geteilt werden.
+- Externe Bibliotheken wie `pyparsing` (Calculator), `msgspec` (Decoder) und `re` (Dissector/Replacer) ziehen C-Extension-Overhead, globale Locks oder großen Speicherbedarf nach sich. Rust-Äquivalente (eigener Pratt-Parser, `serde_json`, `regex`-Crate) sind bereits als Crates verfügbar oder werden in 4g direkt geschrieben.
+- Da die ABC (Phase 3.5) als einheitlicher Ausführungspfad erhalten bleibt, ist die bestehende `ng.abc.processor.Processor`-Schnittstelle (mit `setup`, `metrics`, `process(event) -> LogEvent`) für alle Prozessoren identisch — unabhängig vom Migrationsstand.
 
 ### Leitprinzipien (verbindlich)
 
-1. **Kein Event wird in Python verarbeitet**: Weder `logprep/ng/processor/<name>/processor.py` noch `logprep/ng/abc/processor.py` iterieren über Event-Felder, rufen `pop_dotted_field_value`/`add_fields_to`/`get_dotted_field_value` zur Rule-Anwendung auf oder werten `for rule in matching_rules` aus. Jede `process(event)`-Methode in der Python-Wrapper-Klasse hat exakt die Form:
-   ```python
-   async def process(self, event):
-       self._event = event
-       self._rust.process(event.data)
-       return self._event
-   ```
-   (Metrik-Updates erfolgen entweder in Rust oder als ein einziges `for rule in self._rules: rule.metrics.number_of_processed_events += 1` — beides außerhalb des Event-Verarbeitungs-Pfads.)
+1. **Keine Event-Verarbeitung in Python**: Weder `logprep/ng/processor/<name>/processor.py` noch `logprep/ng/abc/processor.py` iterieren über Event-Felder, rufen `pop_dotted_field_value`/`add_fields_to`/`get_dotted_field_value` zur Rule-Anwendung auf oder werten `for rule in matching_rules` aus. Die ABC-`process`-Methode (Phase 3.5) ruft `self._core.process(...)`; migrierte Prozessoren stellen keinen `_apply_rules`-Callback mehr bereit (das `rule_specs`-Slot trifft). `_apply_rules` entfällt pro migriertem Processor vollständig.
 
-2. **rule_tree nur via Rust**: `tree.get_matching_rules(...)` wird ausschließlich innerhalb der Rust-Processor-Implementierung aufgerufen. Python-Code sieht nur das Endergebnis (`event.data` mutiert).
+2. **rule_tree nur via Rust**: `tree.get_matching_rules(...)` wird ausschließlich innerhalb des Rust-`ProcessorCore` (Phase 3.5) aufgerufen. Python-Code sieht nur das `ProcessOutcome` (`matched_rule_ids` + Warnings).
 
-3. **Rule komplett in Rust**: Die für den Processor spezifische Rule-Struktur (Felder, Defaults, Validatoren) wird in Rust als eigenes Struct mit `serde::Deserialize` definiert. `attrs` wird nicht mehr für Rule-Klassen verwendet. Python-`Rule`-Klasse bleibt für File-I/O, Filter-Parsing und Metriken bestehen; sie hält jedoch nur noch eine `rule_id`-Referenz auf die echte Rule in der Rust-Instanz.
+3. **`RuleSpec` in Rust, `Rule`-Python-API bleibt erhalten**: Die processor-spezifische Rule-Logik wird in Rust als `RuleSpec`-Struct mit `apply(&self, event: &mut Value)` + `validate(&Map) -> Result<(), String>` definiert und beim `add_rule` in den `rule_specs`-Slot des Cores eingetragen. **ABER**: die Python-`Rule`-Klasse (`logprep/processor/<name>/rule.py`) bleibt als `attrs`-`@define` mit voller `Config` bestehen — sie ist die externe Introspection-API (`rule.drop`, `rule.source_fields`, `rule.description`, `rule.filter_str`, `rule.metrics`, `rule_class`-Attribut, `rules`-Property). Beim `add_rule` wird die Python-Rule *und* der Rust-`RuleSpec` parallel registriert: die Python-Seite für externe Introspection/Metriken-Source-of-Truth, die Rust-Seite für `apply`. `attrs` wird **nicht** aus den Python-Rule-Klassen entfernt; nur die pro-Event-Verarbeitung wandert nach Rust.
 
-4. **Externe Python-Bibliotheken → Rust-Crate oder Rust-Implementierung**: Die Tabelle in [§4.0 Crate-Entscheidungen](#40-crate-entscheidungen) ist verbindlich. Keine Phase-4-Implementierung darf eine dort nicht aufgeführte externe Python-Bibliothek einführen.
+4. **Externe Python-Bibliotheken → Rust-Crate oder Rust-Implementierung**: Die Tabelle in [§4.0 Crate-Entscheidungen](#40-crate-entscheidungen) ist verbindlich. Keine Phase-4-Implementierung darf eine dort nicht aufgeführte externe Python-Bibliothek für die Event-Verarbeitung einführen. `attrs` an Python-Rule-Klassen ist von diesem Verbot ausgenommen (Leitprinzip 3).
 
 5. **Phase-1-Helper werden wiederverwendet**: Die in Phase 1 nach Rust portierten Funktionen (`pop_dotted_field_value`, `pop_field_value`, `add_field_to`, `add_field_to_silent_fail`, `add_and_overwrite_key`, `add_and_not_overwrite_key`, `get_dotted_field_value`, `get_dotted_field_value_with_missing`, `get_dotted_field_values`, `has_dotted_field`, `get_source_fields_dict`, `resolve_template`, `add_and_overwrite`, `append`, `append_as_list`, `get_dotted_field_list`, `field_list_to_dotted_field`, `join_dotted_fields`) werden in Phase 4 über `pub(crate) fn` aus `crates/logprep-core/src/field/value.rs` konsumiert (siehe Subphase 4a). **Diese Funktionen werden in Phase 4 nicht reimplementiert.** Deduplizierung wird durch direkten Funktionsaufruf sichergestellt.
 
-6. **Kein Python-Fallback**: Nach Phase 4 gibt es für `pop_dotted_field_value` etc. weiterhin den PyO3-Wrapper (in `crates/logprep-core/src/field/py.rs`) — dieser ist nun aber ein **dünner Adapter**, der `field::value::pop_dotted_field_value` aufruft, nicht umgekehrt. Wer in `process()` der ng-Processor-Klasse noch `pop_dotted_field_value` direkt aufruft, signalisiert, dass die Migration des Prozessors unvollständig ist.
+6. **Kein Python-Fallback**: Nach Phase 4 gibt es für `pop_dotted_field_value` etc. weiterhin den PyO3-Wrapper (in `crates/logprep-core/src/field/py.rs`) — dieser ist ein **dünner Adapter**, der `field::value::pop_dotted_field_value` aufruft, nicht umgekehrt. Wer in `process()` / `_apply_rules` einer ng-Processor-Klasse noch `pop_dotted_field_value` direkt aufruft, signalisiert, dass die Migration des Prozessors unvollständig ist.
 
-7. **Filter-Parsing bleibt Python-seitig**: `LuceneFilter.create(...)` aus Phase 2 liefert eine `FilterExpression` (Rust-Klasse) zurück. Die `add_rule`-Pipeline des Rust-Prozessors nimmt diesen Filter (via `FilterExpressionInner::from_py_object`) entgegen, parst ihn über den bereits existierenden `RuleParserInner` in Segmente und fügt sie dem internen `TreeInner` hinzu. Der Python-`RuleLoader` bleibt für File-I/O zuständig.
+7. **Metriken: Source of Truth bleibt Python, Rust liefert `matched_rule_ids`**: Rust liefert pro `process()` die `matched_rule_ids` (Phase 3.5 Outcome). Python inkrementiert `Rule.metrics.number_of_processed_events` ausschließlich über diese IDs:
+   ```python
+   for rid in outcome.matched_rule_ids:
+       self._rule_id_to_rule[rid].metrics.number_of_processed_events += 1
+   ```
+   Es wird **niemals** über alle Rules iteriert (`self._rule_id_to_rule.values()`), da nur die getroffenen Rules zählen. `matched_rule_ids` ist der definierte Seam für die spätere Rust-Metrics-Migration (Anforderung 3): dann übernimmt ein Rust-Registry die Zähler, und `Rule.metrics` wird zum dünnen PyO3-Blick darauf. Vorher ist **keine** Metrik-Logik in `RuleSpec::apply` zu implementieren.
+
+8. **Filter-Parsing bleibt Python-seitig**: `LuceneFilter.create(...)` aus Phase 2 liefert eine `FilterExpression` (Rust-Klasse) zurück. Die `add_rule`-Pipeline registriert den Filter via `FilterExpressionInner::from_py_object` beim `ProcessorCore`, der ihn über den bereits existierenden `RuleParserInner` (Phase 3) in Segmente parst und dem internen `TreeInner` hinzufügt. Der Python-`RuleLoader` bleibt für File-I/O zuständig.
 
 ### Architektur (Ist vs. Soll)
 
-**Ist (vor Phase 4)**:
+**Ist (nach Phase 3.5, mit un-migriertem Processor)**:
 ```
-Python: Processor.process(event)
-  → ng.abc.processor._process_rule_tree(event, self._rule_tree)   # Python-Wrapper
-    → tree.get_matching_rules(event)                              # delegiert an Rust
-    → for rule in matching_rules: rule.matches(event)             # Python-Methode
-    → self._apply_rules(event, rule)                              # Python-Subclass
-      → pop_dotted_field_value / add_fields_to / ...              # Python-Helper → Rust
-      → pyparsing / msgspec / re / base64 / attrs                 # externe Libs
+Python: Processor.process(event)                      # ABC (Phase 3.5)
+  → PyProcessorCore.process(event, apply_hook=…)      # Rust (Phase 3.5)
+    ↳ TreeInner::get_matching_rules                   # Rust (Phase 3)
+    ↳ für jede rule_id: apply_hook(py, rule_id, ..)   # Callback → Python
+      → Python _apply_rules(event, rule)             # Python-Subclass
+        → pop_dotted_field_value / add_fields_to / .. # Python-Helper → Rust
+        → pyparsing / msgspec / re / base64           # externe Libs
+  ← outcome.matched_rule_ids → Python-Metriken
 ```
 
-**Soll (nach Phase 4)**:
+**Soll (nach Phase 4, migrierter Processor)**:
 ```
-Python: Processor.process(event)               # 3–5 Zeilen, KEINE Event-Verarbeitung
-  → rust_processor.process(event)              # 1 Aufruf, alles in Rust
-    ↳ TreeInner::get_matching_rules            # Rust (Phase 3)
-    ↳ für jede rule_id: RustRule::apply(...)   # Rust
-    ↳ field::value::pop_dotted_field_value     # Rust (Phase 1, wiederverwendet)
-    ↳ field::value::add_field_to               # Rust (Phase 1, wiederverwendet)
-    ↳ meval / serde_json / regex               # Crates statt Python-Libs
-    ↳ Event als serde_json::Value mutiert      # 0 Python-Roundtrips pro Rule
+Python: Processor.process(event)                      # ABC unverändert (Phase 3.5)
+  → PyProcessorCore.process(event, apply_hook=None)  # Rust, kein Callback nötig
+    ↳ TreeInner::get_matching_rules                  # Rust (Phase 3)
+    ↳ für jede rule_id: rule_specs[id].apply(event)  # Rust (Phase 4)
+    ↳ field::value::pop_dotted_field_value           # Rust (Phase 1, wiederverwendet)
+    ↳ field::value::add_field_to                     # Rust (Phase 1, wiederverwendet)
+    ↳ pratt-parser / serde_json / regex               # Crates statt Python-Libs
+    ↳ Event als serde_json::Value mutiert            # 0 Python-Roundtrips pro Rule
+  ← outcome.matched_rule_ids → Python-Metriken (Source of Truth)
 ```
 
 ### 4.0 Crate-Entscheidungen
@@ -158,7 +304,8 @@ Python: Processor.process(event)               # 3–5 Zeilen, KEINE Event-Verar
 | `msgspec.json.Decoder` | `decoder/decoders.py` (`parse_json`, `parse_docker`) | `serde_json` (bereits als `serde_json.workspace = "1"` in `Cargo.toml`) | ✅ bereits vorhanden |
 | `base64`, `binascii` | `decoder/decoders.py` (`parse_base64`) | `base64 = "0.22"` Crate | ✅ hinzufügen |
 | Python `re` | `dissector/rule.py`, `replacer/rule.py`, `decoder/decoders.py` (alle Regex-Operationen) | `regex` Crate (bereits als `regex.workspace = "1"` in `Cargo.toml`) | ✅ bereits vorhanden |
-| `attrs` (`@define`, `validators`) | Alle `rule.py` der 9 Prozessoren | `serde::Deserialize` mit `#[serde(deny_unknown_fields)]` + pro-Feld-`#[serde(default = "...")]` | natives Rust-Pattern |
+| `attrs` (`@define`, `validators`) | Python-Rule-Klassen (externer Zugriff, Introspection, Metriken-Labels) | **bleibt** an `logprep/processor/<name>/rule.py` — Teil der externen Python-API (Leitprinzip 3). Die *Event-Verarbeitungs*-Logik nutzt stattdessen Rust-`RuleSpec` mit `serde::Deserialize` | keine Migration |
+| `attrs` (`@define`, `validators`) | Rust-`RuleSpec`-Structs (Event-Verarbeitung) | `serde::Deserialize` mit `#[serde(deny_unknown_fields)]` + pro-Feld-`#[serde(default = "...")]` | natives Rust-Pattern |
 | `dataclasses.dataclass` | `replacer/rule.py`, `dissector/rule.py` | Native Rust-Structs | nativ |
 | `functools.partial` | `decoder/decoders.py` (`partial(_parse, regexes=...)`) | Rust-Closures (`.map_err(...)`, `move |x| ...`) | nativ |
 | `functools.cached_property` | `calculator/processor.py` (BNF als Singleton) | `OnceCell` / `OnceLock` aus `std::sync` | nativ |
@@ -179,10 +326,12 @@ crates/logprep-core/src/
 │   ├── mod.rs                # re-exportiert value::* und py::*
 │   ├── value.rs              # pure-Rust Operationen auf serde_json::Value  (NEU in 4a)
 │   └── py.rs                 # PyO3-Wrapper (alter field.rs-Inhalt)          (UMZUG in 4a)
-├── processor/                # (NEU)
-│   ├── mod.rs                # ProcessorCore-Trait, RuleSpec-Trait, Registration
-│   ├── rule_spec.rs          # gemeinsame Rule-Validierung, SplitFields
-│   ├── dropper.rs
+├── processor/
+│   ├── mod.rs                # RuleSpec-Trait, Registration                   (Core aus 3.5)
+│   ├── core.rs               # ProcessorCore + ProcessOutcome                 (Phase 3.5)
+│   ├── outcome.rs            # ProcessOutcome-Typen                            (Phase 3.5)
+│   ├── spec_helper.rs        # gemeinsame Rule-Validierung, SplitFields       (NEU in 4b)
+│   ├── dropper.rs            # DropperRuleSpec + PyDropperSpecFactory
 │   ├── deleter.rs
 │   ├── field_manager.rs      # inkl. Concatenator
 │   ├── string_splitter.rs
@@ -194,71 +343,58 @@ crates/logprep-core/src/
 
 ### Datenmodell (Rust)
 
-Jeder Processor definiert drei Typen:
+Die Orchestrierung (`ProcessorCore`, `ProcessOutcome`) existiert seit Phase 3.5. Phase 4 definiert pro Processor nur noch zwei Typen — den `RuleSpec` und die Slot-Registrierung:
 
 ```rust
-// 1) Pure Rust Rule — keine PyO3, keine Python-Objekte
+// 1) Pure Rust RuleSpec — keine PyO3, keine Python-Objekte
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DropperRule {
+pub struct DropperRuleSpec {
     pub drop: Vec<String>,
-    #[serde(default = "default_drop_full")]
+    #[serde(default = "default_true")]
     pub drop_full: bool,
 }
 
-// 2) Pure Rust Processor — nutzt field::value::* aus Phase 1
-pub struct DropperProcessor {
-    name: String,
-    rules: HashMap<u64, DropperRule>,
-    rule_tree: TreeInner,                  // Phase 3
-}
-
-impl DropperProcessor {
-    pub fn new(name: String) -> Self { ... }
-    pub fn add_rule(&mut self, rule_id: u64, filter: &FilterExpressionInner,
-                    raw: &serde_json::Map<String, Value>) -> Result<(), String> { ... }
-    pub fn process(&self, event: &mut Value) -> Result<(), String> {
-        for rule_id in self.rule_tree.get_matching_rules(event) {
-            let rule = &self.rules[&rule_id];
-            for dotted in &rule.drop {
-                crate::field::value::pop_dotted_field_value(event, dotted, rule.drop_full);
-            }
+impl RuleSpec for DropperRuleSpec {
+    const TYPE_NAME: &'static str = "dropper";
+    fn validate(_raw: &serde_json::Map<String, Value>) -> Result<(), String> { Ok(()) }
+    fn apply(&self, event: &mut Value) -> Result<(), String> {
+        for dotted in &self.drop {
+            let key = crate::field::value::get_dotted_field_list(dotted);
+            crate::field::value::pop_dotted_field_value(event, &key, self.drop_full);
         }
         Ok(())
     }
 }
 
-// 3) PyO3-Adapter — dünner Wrapper ohne Event-Logik
-#[pyclass]
-pub struct PyDropper {
-    inner: DropperProcessor,
+// 2) Registrierung am bestehenden ProcessorCore (Phase 3.5) — kein eigener Processor-Struct
+// Beim add_rule eines Phase-4-Prozessors:
+pub fn register_dropper_spec(core: &mut PyProcessorCore, rule_id: u64,
+                             raw: &serde_json::Map<String, Value>) -> Result<(), String> {
+    let spec: DropperRuleSpec = serde_json::from_value(Value::Object(raw.clone()))
+        .map_err(|e| e.to_string())?;
+    DropperRuleSpec::validate(raw)?;
+    core.set_rule_spec(rule_id, Box::new(spec));   // belegt den rule_specs-Slot → apply_hook entfällt
+    Ok(())
 }
+```
+
+`PyProcessorCore::set_rule_spec(rule_id, Box<dyn RuleSpec>)` ist die einzige neue Methode, die Phase 4 an der Core-API ergänzt. Der `process`-Pfad des Cores (Phase 3.5) dispatcht: trifft der `rule_specs`-Slot, läuft `apply` in Rust; sonst der Python-Callback.
+
+```rust
+// 3) PyO3-Adapter — pro Processor nur die Spec-Factory, kein eigener Processor-Struct
+#[pyclass(name = "DropperSpecFactory")]
+pub struct PyDropperSpecFactory;
 
 #[pymethods]
-impl PyDropper {
-    #[new]
-    fn new(name: String) -> Self {
-        Self { inner: DropperProcessor::new(name) }
-    }
-
-    #[pyo3(signature = (rule_id, filter, rule_data))]
-    fn add_rule(&mut self, py: Python, rule_id: u64, filter: &Bound<'_, PyAny>,
-                rule_data: &Bound<'_, PyDict>) -> PyResult<()> {
-        let inner = FilterExpressionInner::from_py_object(filter)?;
+impl PyDropperSpecFactory {
+    /// Wird vom Python-Adapter in load_rules pro Rule einmal gerufen.
+    fn make_and_register(&self, py: Python, core: &mut PyProcessorCore,
+                        rule_id: u64, rule_data: &Bound<'_, PyDict>) -> PyResult<()> {
         let raw = pydict_to_map(rule_data)?;
-        let rule: DropperRule = serde_json::from_value(Value::Object(raw))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        self.inner.add_rule(rule_id, &inner, &serde_json::from_value(Value::Object(raw)).unwrap())
+        register_dropper_spec(core, rule_id, &raw)
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
-
-    fn process(&self, py: Python, event: &Bound<'_, PyDict>) -> PyResult<()> {
-        let mut value = pydict_to_json(event)?;
-        self.inner.process(&mut value).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        json_to_pydict(py, event, &value)
-    }
-
-    fn rule_count(&self) -> usize { self.inner.rules.len() }
 }
 ```
 
@@ -266,49 +402,52 @@ impl PyDropper {
 
 ```python
 # logprep/ng/processor/dropper/processor.py
-from logprep._rust.processor import PyDropper as _RustDropper
+from logprep._rust.processor import PyDropperSpecFactory as _SpecFactory
 from logprep.ng.abc.processor import Processor
-from logprep.processor.dropper.rule import DropperRule
+from logprep.processor.dropper.rule import DropperRule   # attrs-Config bleibt (externe API)
 from logprep.util.rule_loader import RuleLoader
 
 
 class Dropper(Processor):
-    """Drop log events. Logik vollständig in Rust (Phase 4)."""
+    """Drop log events. Event-Verarbeitung vollständig in Rust (Phase 4 RuleSpec)."""
 
-    rule_class = DropperRule
+    rule_class = DropperRule   # bleibt — externe Introspection-API
 
     def __init__(self, name: str, configuration: "Processor.Config") -> None:
-        Processor.__init__(self, name, configuration, _rust_processor_factory=_RustDropper)
+        # ABC baut den gemeinsamen ProcessorCore (Phase 3.5) auf.
+        Processor.__init__(self, name, configuration)
+        self._spec_factory = _SpecFactory()
         self.load_rules(rules_targets=self.config.rules)
 
     def load_rules(self, rules_targets) -> None:
-        for rule in RuleLoader(rules_targets, self.name).rules:
-            self._rust.add_rule(
-                rule_id=int(rule.id, 16) if isinstance(rule.id, str) else rule.id,
-                filter=rule.filter,
+        # ABC.load_rules kümmert sich um Core-Registrierung (Filter + py_rule);
+        # hier zusätzlich den Rust-RuleSpec-Slot belegen, damit apply_hook entfällt.
+        super().load_rules(rules_targets)   # registriert im Core via 3.5-Pipeline
+        for rule in self._rule_id_to_rule.values():
+            self._spec_factory.make_and_register(
+                core=self._core,
+                rule_id=rule._intern_id,
                 rule_data=rule._config.asdict(),
             )
-            self._rule_id_to_rule[rule.id] = rule
 
-    async def process(self, event):
-        self._event = event
-        self._rust.process(event.data)
-        for rule in self._rule_id_to_rule.values():
-            rule.metrics.number_of_processed_events += 1
-        return self._event
+    # Kein _apply_rules mehr — der Rust-RuleSpec übernimmt apply.
+    # process() wird von der ABC (Phase 3.5) geerbt und nicht überschrieben.
 ```
 
-> **Negativkatalog**: Diese Imports/Operationen sind im Python-Adapter **verboten**:
+`process` wird **nicht** pro Processor überschrieben — geerbt von der ABC (Phase 3.5), die `self._core.process(...)` ruft und Metriken via `outcome.matched_rule_ids` pflegt. `_apply_rules` entfällt für migrierte Prozessoren. Die Python-`DropperRule`-Klasse (`logprep/processor/dropper/rule.py`) bleibt unverändert eine `attrs`-`@define` mit `Config` und `Metrics` — Quelle für `rule.drop`, `rule.metrics` etc.
+
+> **Negativkatalog**: Diese Imports/Operationen sind im Python-Adapter eines migrierten ng-Prozessors **verboten**:
 > - `from logprep.util.helper import pop_dotted_field_value, add_fields_to, get_dotted_field_value, …`
 > - `from pyparsing import …`
 > - `import msgspec` (zu Decoder-Zwecken — Decoder ist in Rust)
 > - `import re` (für Rule-Logik — Regex ist in Rust)
 > - `import base64` (Decoder ist in Rust)
 > - `self._rule_tree.get_matching_rules(...)`
-> - `for rule in matching_rules: self._apply_rules(event, rule)`
-> - `if/elif`-Logik auf Event-Feldern in `process()`
+> - `def _apply_rules(self, event, rule): ...` (migrierte Prozessoren überschreiben dies nicht)
+> - `async def process(self, event): ...` (geerbt von ABC; Überschreiben旁passst den Rust-Pfad)
+> - `if/elif`-Logik auf Event-Feldern in `load_rules`
 >
-> Die einzigen `for`-Schleifen in Python sind: (a) `for rule in RuleLoader(…).rules` in `load_rules` und (b) `for rule in self._rule_id_to_rule.values()` für Metriken. Beide sind außerhalb des Event-Verarbeitungs-Pfads.
+> Die einzigen Schleifen in Python-Adaptern sind: (a) `for rule in RuleLoader(…).rules` / `super().load_rules` in `load_rules`, (b) `for rule in self._rule_id_to_rule.values()` in `load_rules` zur Spec-Registrierung, und (c) der geerbte Metrik-Loop in der ABC über `outcome.matched_rule_ids`. Alle liegen **außerhalb** des Event-Verarbeitungs-Pfads.
 
 ### Schritte
 
@@ -338,37 +477,19 @@ class Dropper(Processor):
   - 30+ Rust-Unit-Tests, die die Byte-Äquivalenz der pure-Rust-Versionen zu den Python-Versionen verifizieren (Behavior-Preservation-Tests, abgeleitet aus den Phase-1-Tests). **Keine** Tests, die die PyO3-Wrapper direkt prüfen — sie sind jetzt trivial.
   - Cargo.toml: `serde_json` ist bereits vorhanden; **kein neues Crate nötig** für 4a.
 
-- **4b — ProcessorCore-Trait + gemeinsame Typen (Pure Rust Core)**: In `crates/logprep-core/src/processor/mod.rs`:
+- **4b — `RuleSpec`-Trait + Slot-Registrierung (Pure Rust Core)**: Der `RuleSpec`-Trait ist in Phase 3.5 als leerer Trait deklariert. Phase 4b füllt ihn in `crates/logprep-core/src/processor/mod.rs`:
   ```rust
-  pub trait ProcessorCore: Send + Sync {
-      fn name(&self) -> &str;
-      fn add_rule(&mut self, rule_id: u64, filter: &FilterExpressionInner,
-                  raw: &serde_json::Map<String, Value>) -> Result<(), String>;
-      fn process(&self, event: &mut Value) -> Result<(), String>;
-  }
-  pub trait RuleSpec: Sized + serde::de::DeserializeOwned + Clone + Send + Sync + std::fmt::Debug {
+  pub trait RuleSpec: Send + Sync {
       const TYPE_NAME: &'static str;
       fn validate(raw: &serde_json::Map<String, Value>) -> Result<(), String>;
-  }
-  pub struct RuleSlot<R: RuleSpec> {
-      pub spec: R,
-      pub filter_segments: Vec<FilterExpressionInner>,
-  }
-  pub struct RuleRegistry<R: RuleSpec> {
-      pub rules: HashMap<u64, RuleSlot<R>>,
-      pub tree: TreeInner,
-  }
-  impl<R: RuleSpec> RuleRegistry<R> {
-      pub fn add(&mut self, rule_id: u64, filter: &FilterExpressionInner,
-                 raw: &serde_json::Map<String, Value>,
-                 priority: &HashMap<String, String>, tags: &HashMap<String, String>) -> Result<(), String>;
-      pub fn process(&self, event: &mut Value) -> Result<(), String>;  // iteriert tree.matches + wendet spec.apply auf
+      fn apply(&self, event: &mut Value) -> Result<(), String>;
   }
   ```
-  Gemeinsame Helfer:
-  - `SplitFields::split(raw: &Map) -> Vec<Vec<String>>` — splittet Dotted-Field-Strings einmalig in `Vec<String>` beim `add_rule`. Verwendet `field::value::get_dotted_field_list`.
-  - `validate_required_keys(raw, &["drop"])` — prüft Pflichtschlüssel (ersetzt `attrs`-Validatoren).
-  - `processor::register(m)` exportiert alle PyO3-Klassen unter `logprep._rust.processor.*`.
+  neue Core-Methode `PyProcessorCore::set_rule_spec(&mut self, rule_id: u64, spec: Box<RuleSpec>)` (Phase 3.5 hatte `rule_specs: HashMap<u64, Box<dyn RuleSpec>>` leer vorgesehen). Im `process`-Pfad des Cores (Phase 3.5) gilt danach: trifft der `rule_specs`-Slot → `spec.apply(event)` in Rust; andernfalls Python-Callback (un-migrierte Prozessoren).
+  Gemeinsame Helfer in `processor/spec_helper.rs`:
+  - `SplitFields::split(raw: &Map) -> Vec<Vec<String>>` — splittet Dotted-Field-Strings einmalig beim `add_rule`. Verwendet `field::value::get_dotted_field_list`.
+  - `validate_required_keys(raw, &["drop"])` — prüft Pflichtschlüssel (zusätzlich, nicht ersetzend — der Python-Rule hat ihre eigenen `attrs`-Validatoren, die als Sicherheitsnetz für die externe API erhalten bleiben).
+  - `processor::register(m)` exportiert alle Spec-Factory-PyO3-Klassen unter `logprep._rust.processor.<name>_spec` (statt `PyDropper`-Processor-Klassen).
   - 10+ Rust-Unit-Tests für Trait + Helper.
 
 - **4c — Dropper in Rust (Referenz-Implementierung)**: `crates/logprep-core/src/processor/dropper.rs`:
@@ -383,18 +504,17 @@ class Dropper(Processor):
   impl RuleSpec for DropperRuleSpec {
       const TYPE_NAME: &'static str = "dropper";
       fn validate(_raw: &Map) -> Result<(), String> { Ok(()) }
-  }
-  impl DropperRuleSpec {
-      pub fn apply(&self, event: &mut Value) {
+      fn apply(&self, event: &mut Value) -> Result<(), String> {
           for dotted in &self.drop {
               let key = crate::field::value::get_dotted_field_list(dotted);
               crate::field::value::pop_dotted_field_value(event, &key, self.drop_full);
           }
+          Ok(())
       }
   }
-  // ... PyDropper wie im Datenmodell-Abschnitt ...
+  // ... PyDropperSpecFactory wie im Datenmodell-Abschnitt ...
   ```
-  PyO3-Adapter `PyDropper` mit `add_rule(rule_id, filter, rule_data)` und `process(event_dict)`. 30+ Rust-Unit-Tests inkl. Edge-Cases (escaped Dots, leere Dicts, `drop_full=false`, `drop=[]`). Python `logprep/ng/processor/dropper/processor.py` wird auf den 5-Zeilen-Adapter reduziert. Bestehende Dropper-Tests müssen ohne Änderung grün sein.
+  PyO3-Adapter `PyDropperSpecFactory` mit `make_and_register(core, rule_id, rule_data)`. 30+ Rust-Unit-Tests inkl. Edge-Cases (escaped Dots, leere Dicts, `drop_full=false`, `drop=[]`). Python `logprep/ng/processor/dropper/processor.py` registriert den Spec in `load_rules` (kein `_apply_rules` mehr). `logprep/processor/dropper/rule.py` (attrs-`DropperRule`) bleibt unverändert für die externe API. Bestehende Dropper-Tests müssen ohne Änderung grün sein.
 
 - **4d — Deleter in Rust**: `DeleterRuleSpec { delete: bool }`. `apply`: wenn `delete`, `*event = Value::Object(Default::default())`. 20+ Rust-Unit-Tests.
 
@@ -419,19 +539,21 @@ class Dropper(Processor):
   - 40+ Rust-Unit-Tests.
 
 - **4i — Aufräumen + Legacy-Path-Validierung + Negativkatalog-Check**:
-  1. `logprep/processor/<name>/processor.py` und `rule.py` werden zu **Re-Exports** (für nicht-ng-Pfad), die `logprep.ng.processor.<name>.processor` importieren. Damit existiert nur noch **eine** Logik-Quelle (Rust) und der nicht-ng-Pfad ist nur ein dünner Python-Alias.
-  2. `logprep.registry.Registry._ng_mapping` zeigt weiterhin auf `logprep.ng.processor.<name>.processor.<Name>` — keine Änderung.
+  1. `logprep/processor/<name>/processor.py` wird zum **Re-Export** (für nicht-ng-Pfad), der `logprep.ng.processor.<name>.processor` importiert. Damit existiert nur noch **eine** Logik-Quelle (Rust via Core) und der nicht-ng-Pfad ist nur ein dünner Python-Alias. **`logprep/processor/<name>/rule.py` bleibt unverändert** — die `attrs`-`Rule`-Klasse ist die externe Introspection-API und Source der Metriken; sie wird *nicht* re-exportiert oder reduziert.
+  2. `logprep.registry.Registry._ng_mapping` und `_non_ng_mapping` zeigen weiterhin auf die jeweiligen `processor.<Name>` — keine Änderung.
   3. `tests/unit/processor/<name>/test_<name>.py` läuft **ohne Änderung** grün — Test-Suite ist die Wahrheit.
   4. **Negativkatalog-Check** (CI-Skript `scripts/check_phase4_adapter_thinness.py`):
      ```bash
-     for f in logprep/ng/processor/*/processor.py; do
-       grep -E 'pop_dotted_field_value|add_fields_to|get_dotted_field_value|pyparsing|msgspec|^import re|^import base64|_rule_tree\.get_matching_rules' "$f" \
+     # migrierte Prozessoren (in PHASE4_DONE.txt gelistet) dürfen kein _apply_rules / process / Helper importieren
+     for name in $(cat scripts/PHASE4_DONE.txt); do
+       f="logprep/ng/processor/$name/processor.py"
+       grep -E 'pop_dotted_field_value|add_fields_to|get_dotted_field_value|pyparsing|msgspec|^import re|^import base64|_rule_tree\.get_matching_rules|def _apply_rules|async def process' "$f" \
          && { echo "VIOLATION in $f"; exit 1; }
      done
      ```
-     Exit-Code ≠ 0 bricht CI.
-  5. `benchmarks/results/phase4_<name>_ng_*.txt` wird mit `benchmarks/run_phase_benchmark.py` aufgenommen; Vergleich gegen `phase3_ng_*.txt` darf keine Regression > 5 % zeigen.
-  6. `CHANGELOG.md`: Eintrag in „## Upcoming Changes / ### Improvements" pro Processor („`<name>`: migrate core logic + rule spec to Rust via PyO3, replace `<external_lib>` with `<rust_crate>`").
+     Exit-Code ≠ 0 bricht CI. (Un-migrierte Prozessoren behalten `_apply_rules`; sie werden vom Check nicht erfasst.)
+  5. `benchmarks/results/phase4_<name>_ng_*.txt` wird mit `benchmarks/run_phase_benchmark.py` aufgenommen; Vergleich gegen `phase3_5_ng_*.txt` darf keine Regression > 5 % zeigen.
+  6. `CHANGELOG.md`: Eintrag in „## Upcoming Changes / ### Improvements" pro Processor („`<name>`: migrate rule apply to Rust `RuleSpec` via `ProcessorCore` (Phase 3.5), replace `<external_lib>` with `<rust_crate>`; Python `Rule` retained for API").
 
 ### Verifizierung pro Subphase
 
@@ -473,15 +595,17 @@ uv run python ./benchmarks/run_phase_benchmark.py \
 
 ### Akzeptanzkriterien (Phase 4 abgeschlossen)
 
-- [ ] Alle 9 priorisierten Prozessoren (dropper, deleter, field_manager, concatenator, string_splitter, calculator, dissector, replacer, decoder) sind in `crates/logprep-core/src/processor/<name>.rs` implementiert.
+- [ ] Alle 9 priorisierten Prozessoren (dropper, deleter, field_manager, concatenator, string_splitter, calculator, dissector, replacer, decoder) haben einen `RuleSpec`-Struct in `crates/logprep-core/src/processor/<name>.rs` und sind über den `ProcessorCore`-Slot registriert (kein Python-Callback mehr).
 - [ ] `field::value` (Pure-Rust-Versionen der Phase-1-Helper) ist in `crates/logprep-core/src/field/value.rs` vorhanden; `field::py` ist dünner Wrapper.
-- [ ] **Kein** `logprep/ng/processor/<name>/processor.py` importiert `pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, `pyparsing`, `msgspec`, `re`, `base64` oder ruft `_rule_tree.get_matching_rules` auf (verifiziert via `scripts/check_phase4_adapter_thinness.py`).
-- [ ] **Keine** `for`-Schleife über `event.data`-Keys, `if`-Verzweigungen auf Event-Feldern, oder Event-mutierende Operationen in `process()` der Python-Adapter.
-- [ ] Externe Python-Bibliotheken ersetzt: `pyparsing` → eigener Pratt-Parser, `msgspec` → `serde_json`, Python-`re` → `regex` Crate, `base64` → `base64` Crate, `attrs` → `serde::Deserialize`.
-- [ ] Phase-1-Helper werden in jeder Processor-Implementierung über `crate::field::value::*` aufgerufen (kein Reimplementieren).
+- [ ] **Kein** migriertes `logprep/ng/processor/<name>/processor.py` importiert `pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, `pyparsing`, `msgspec`, `re`, `base64` oder ruft `_rule_tree.get_matching_rules` auf, und definiert kein `_apply_rules` / kein `async def process` (verifiziert via `scripts/check_phase4_adapter_thinness.py`).
+- [ ] **Keine** `for`-Schleife über `event.data`-Keys, `if`-Verzweigungen auf Event-Feldern, oder Event-mutierende Operationen in migrierten Python-Adaptern (nur `load_rules`-Registrierung).
+- [ ] Die Python-`Rule`-Klassen aller 9 Prozessoren (`logprep/processor/<name>/rule.py`) bleiben **unverändert** als `attrs`-`@define` mit `Config` + `Metrics` — externe API (`rule.drop`, `rule.source_fields`, `rule.metrics`, …) intakt.
+- [ ] Metriken werden ausschließlich über `outcome.matched_rule_ids` gepflegt (aus der ABC, Phase 3.5); keine Iteration über alle Rules in `process` (Leitprinzip 7 Vertrag).
+- [ ] Externe Python-Bibliotheken für die Event-Verarbeitung ersetzt: `pyparsing` → eigener Pratt-Parser, `msgspec` → `serde_json`, Python-`re` → `regex` Crate, `base64` → `base64` Crate. `attrs` bleibt an Python-Rule-Klassen (Leitprinzip 3).
+- [ ] Phase-1-Helper werden in jeder `RuleSpec::apply` über `crate::field::value::*` aufgerufen (kein Reimplementieren).
 - [ ] Bestehende Unit-Tests aller 9 Prozessoren laufen ohne Modifikation grün.
 - [ ] Rust-Unit-Tests pro Processor: ≥ 20 (dropper, deleter), ≥ 40 (field_manager, calculator, dissector, replacer, decoder), ≥ 50 (concatenator, string_splitter). Plus ≥ 30 für `field::value`.
-- [ ] Performance: kein Prozessor zeigt > 5 % Regression ggü. Phase-3-Baseline; mindestens die field_manager-/dropper-Klasse zeigen ≥ 10 % Speedup.
+- [ ] Performance: kein Prozessor zeigt > 5 % Regression ggü. Phase-3.5-Baseline; mindestens die field_manager-/dropper-Klasse zeigen ≥ 10 % Speedup (Callback-Roundtrip entfällt).
 - [ ] `pre-commit run --all-files` grün, `mypy`/`pylint`/`black` clean, `uv lock --check` ok, neue CI-Jobs grün.
 - [ ] `CHANGELOG.md` enthält Eintrag pro migriertem Prozessor inkl. Crate-Mapping.
 
@@ -496,7 +620,7 @@ uv run python ./benchmarks/run_phase_benchmark.py \
 | `attrs`-Validierung ist subtiler als `serde::Deserialize` (z. B. `deep_iterable` über Dicts, bedingte Defaults) | Pro Processor eine vollständige Liste der Edge-Cases (z. B. `drop: []`, `drop_full: None`, `source_fields: None`) als Rust-Unit-Tests, abgeleitet aus den bestehenden Python-Tests |
 | `timeout`-Decorator (Python) via Thread+Signal vs. `std::sync::mpsc` (Rust) | 4g: Tests mit `timeout=0.001` (sehr kurz) verifizieren, dass Timeout-Fehler als `ProcessingWarning` ankommen, nicht als Panic. `std::thread::spawn` + `recv_timeout` ist die Standard-Idiom in Rust |
 | Round-Trip `dict → serde_json::Value → dict` pro Event | Phase 1 hat den Round-Trip bereits optimiert; Phase 4 nutzt `serde_json::Value` direkt als Event-Container. PyO3 nutzt `Bound<PyDict>::from_owned`/`into_owned` statt `pythonize`-Deepcopy. Benchmark in 4a misst Overhead |
-| Metriken werden in Python via `rule.metrics.number_of_processed_events += 1` aktualisiert; bei Rust-`process` weiß Rust nichts vom Python-`Rule` | (a) Python-Adapter iteriert nach `rust.process()` einmal über die geladenen Rule-IDs (`O(n_rules)`, vernachlässigbar ggü. Event-Verarbeitung) — Default-Variante. (b) Optional: Rust-Processor sammelt `Vec<u64>` der getroffenen Rule-IDs und Python-Adapter nutzt diese — vermeidet Iteration über alle Rules |
+| Metriken: Rust weiß beim `apply` nichts vom Python-`Rule` und seinen `Rule.Metrics` | Rust liefert pro `process()` die `matched_rule_ids` (Phase 3.5 Outcome-Vertrag, Leitprinzip 7). Die ABC (Python) inkrementiert `Rule.metrics.number_of_processed_events` **nur** über die getroffenen IDs — nicht über alle Rules ( korrekt zu `processor.py:146`). Keine Metrik-Logik in `RuleSpec::apply`. Der `matched_rule_ids`-Vertrag ist der spätere Eintrittspunkt für eine Rust-Metrics-Registry (Anforderung 3). Vor dessen Umzug ist `Rule.Metrics` Source of Truth. Edge-Case-Test: Processor mit 0 treffenden Rules → kein Metrik-Inkrement |
 
 ---
 
@@ -659,11 +783,14 @@ uv run python ./benchmarks/benchmark_full_pipeline.py --baseline benchmarks/phas
 Phase 1 (Setup + Dotted-Field)
   └─> Phase 2 (Filter)
        └─> Phase 3 (RuleTree)
-            └─> Phase 4 (Processor)
-                 └─> Phase 5 (Connectors, ng/)
-                      └─> Phase 6 (Pipeline, ng/)
-                           └─> Phase 7 (Runner + CLI, ng/)
+            └─> Phase 3.5 (Processor-Orchestrierung / Base-ABC)
+                 └─> Phase 4 (Processor-RuleSpecs)
+                      └─> Phase 5 (Connectors, ng/)
+                           └─> Phase 6 (Pipeline, ng/)
+                                └─> Phase 7 (Runner + CLI, ng/)
 ```
+
+Phase 3.5 ist die Voraussetzung für Anforderung 1 (intern nur noch Rust): sie migriert die gemeinsame Orchestrierung *vor* der per-Prozessor-Migration. Phase 4 belegt dann pro Processor den `rule_specs`-Slot des Cores.
 
 Jede Phase baut auf der vorherigen auf. Nach jeder Phase:
 1. Alle Tests grün
