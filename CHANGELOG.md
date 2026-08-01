@@ -5,6 +5,7 @@
 
 ### Improvements
 * migration: re-plan phase 4 and insert phase 3.5 (ProcessorCore orchestration) in `MIGRATION_PLAN.md` so that the ng ABC event-processing orchestration moves to Rust before per-processor migration; retain Python `Rule` attrs classes as external introspection API; define `matched_rule_ids` outcome as the seam for the later Rust metrics migration
+* ng: orchestrate event processing in the Rust `PyProcessorCore` (matching, warning/error handling, `apply_multiple_times` loop, `delete_source_fields` cleanup, bypass mode); the ng processor ABC consumes the `ProcessOutcome` (`matched_rule_ids`, `warnings`, `errors`) and dispatches un-migrated rules via a Python callback (`_apply_rule_in_python`)
 
 ### Bugfix
 

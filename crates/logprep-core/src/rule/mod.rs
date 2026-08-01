@@ -26,14 +26,14 @@ pub struct PyRuleTree {
 #[pymethods]
 impl PyRuleTree {
     #[new]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: TreeInner::new(),
         }
     }
 
     #[pyo3(signature = (rule_id, segments))]
-    fn add_rule(&mut self, rule_id: u64, segments: &Bound<'_, PyList>) -> PyResult<()> {
+    pub(crate) fn add_rule(&mut self, rule_id: u64, segments: &Bound<'_, PyList>) -> PyResult<()> {
         for segment in segments.iter() {
             let segment_list = segment.downcast::<PyList>()?;
             let mut parsed = Vec::new();
@@ -50,7 +50,7 @@ impl PyRuleTree {
         Ok(())
     }
 
-    fn get_matching_rules(&self, event: &Bound<'_, PyDict>) -> Vec<u64> {
+    pub(crate) fn get_matching_rules(&self, event: &Bound<'_, PyDict>) -> Vec<u64> {
         match pydict_to_json(event) {
             Ok(json_doc) => self.inner.get_matching_rules(&json_doc),
             Err(_) => Vec::new(),

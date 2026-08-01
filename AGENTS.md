@@ -26,6 +26,13 @@ uv run mypy <changed-files>
 
 # Build docs locally
 sudo apt install pandoc && uv sync --frozen --extra doc && cd doc && make html
+
+# Rebuild the Rust extension (RELEASE profile is required for benchmarks —
+# an unoptimized dev build ~halves ng throughput)
+uv run maturin develop --release --manifest-path crates/logprep-core/Cargo.toml
+
+# Run the ng phase benchmark (starts its own Kafka + OpenSearch compose stack)
+uv run python benchmarks/run_phase_benchmark.py --phase 3 --runs 30 30 30
 ```
 
 ## Architecture
@@ -38,6 +45,10 @@ Logprep is a log processing pipeline: **Input Connector → Processor Chain → 
 - `logprep/ng/` — Next-gen (async, uvloop). Entry: `logprep.run_ng:cli`
 
 Both have their own ABCs (`logprep/abc/` and `logprep/ng/abc/`), connectors, processors, and runners. The registry (`logprep/registry.py`) maps component type names to either legacy or ng implementations; `Registry.set_ng_active(True)` switches the active mapping. Tests preload both mappings at session start.
+
+### ng processor orchestration in Rust
+
+Since phase 3.5, event-processing orchestration for ng lives in `PyProcessorCore` (`crates/logprep-core/src/processor/`): rule-tree matching, warning/error handling, the `apply_multiple_times` loop, `delete_source_fields` cleanup, and bypass mode. The ng ABC (`logprep/ng/abc/processor.py`) only consumes the `ProcessOutcome` (`matched_rule_ids`, `warnings`, `errors`) and dispatches un-migrated rules via the `_apply_rule_in_python` callback. `matched_rule_ids` is the sole channel for rule metrics. The processor's `_rule_tree` is a property whose setter binds the live `RuleTree` (via `tree.inner` + `tree.rule_id_to_rule`) to the core; never call `tree.get_matching_rules(...)` from Python.
 
 ### Key directories
 

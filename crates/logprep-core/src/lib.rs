@@ -2,12 +2,16 @@ use pyo3::prelude::*;
 
 pub mod field;
 pub mod filter;
+pub mod processor;
 pub mod rule;
 
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Rule (Phase 3)
     rule::register(m)?;
+
+    // Processor-Orchestrierung (Phase 3.5)
+    processor::register(m)?;
 
     // Filter (Phase 2)
     filter::register(m)?;
