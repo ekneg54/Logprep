@@ -66,6 +66,7 @@ impl RuleParserInner {
             | FilterExpressionInner::Float { key, .. }
             | FilterExpressionInner::IntegerRange { key, .. }
             | FilterExpressionInner::FloatRange { key, .. }
+            | FilterExpressionInner::NumericRange { key, .. }
             | FilterExpressionInner::StringRange { key, .. }
             | FilterExpressionInner::Regex { key, .. }
             | FilterExpressionInner::Null { key } => Some(key),

@@ -13,6 +13,7 @@ from logprep.filter.expression import (
     KeyDoesNotExistError,
     Not,
     Null,
+    NumericRangeFilterExpression,
     Or,
     RangeBoundary,
     RegExFilterExpression,

@@ -1,14 +1,10 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use regex::Regex;
+use fancy_regex::Regex as FilterRegex;
+use regex::Regex as StdRegex;
 use serde_json::{Map, Value};
 
 // ─── Exceptions (Python-side defined, Rust uses PyErr) ───
-
-/// Helper to raise FilterExpressionError from Rust.
-fn raise_filter_expression_error(msg: &str) -> pyo3::PyErr {
-    pyo3::exceptions::PyException::new_err(msg.to_string())
-}
 
 /// Helper to raise KeyDoesNotExistError from Rust.
 fn raise_key_does_not_exist_error(py: Python, msg: &str) -> pyo3::PyErr {
@@ -27,6 +23,97 @@ fn format_float(value: f64) -> String {
         s.push_str(".0");
     }
     s
+}
+
+// ─── Numerische Range-Grenzen (beliebige Präzision) ───
+
+/// Eine numerische Range-Grenze: Ganzzahl (als kanonischer Dezimalstring für
+/// beliebige Präzision) oder Fließkommazahl.
+#[derive(Debug, Clone)]
+pub enum NumericBound {
+    Int(String),
+    Float(f64),
+}
+
+impl NumericBound {
+    /// Parse eine Grenze aus einem String: erst als Ganzzahl (beliebige
+    /// Präzision), dann als endliche Fließkommazahl. Sonst None.
+    pub fn parse(s: &str) -> Option<NumericBound> {
+        if let Some(canonical) = canonicalize_int_str(s) {
+            return Some(NumericBound::Int(canonical));
+        }
+        if let Ok(f) = s.parse::<f64>() {
+            if f.is_finite() {
+                return Some(NumericBound::Float(f));
+            }
+        }
+        None
+    }
+
+    fn as_f64(&self) -> f64 {
+        match self {
+            NumericBound::Int(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+            NumericBound::Float(f) => *f,
+        }
+    }
+
+    /// Numerischer Vergleich: Int-Int exakt (Stringvergleich beliebiger
+    /// Präzision), sonst über f64.
+    pub fn compare(&self, other: &NumericBound) -> std::cmp::Ordering {
+        match (self, other) {
+            (NumericBound::Int(a), NumericBound::Int(b)) => compare_int_strings(a, b),
+            _ => self
+                .as_f64()
+                .partial_cmp(&other.as_f64())
+                .unwrap_or(std::cmp::Ordering::Equal),
+        }
+    }
+
+    pub fn to_repr(&self) -> String {
+        match self {
+            NumericBound::Int(s) => s.clone(),
+            NumericBound::Float(f) => format_float(*f),
+        }
+    }
+}
+
+/// Kanonisiert einen Ganzzahl-String (optionales '-', Ziffern, keine
+/// führenden Nullen, "-0" → "0"). Gibt None zurück, wenn kein Ganzzahl-String.
+fn canonicalize_int_str(s: &str) -> Option<String> {
+    let (negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let stripped = digits.trim_start_matches('0');
+    if stripped.is_empty() {
+        return Some("0".to_string());
+    }
+    if negative {
+        Some(format!("-{}", stripped))
+    } else {
+        Some(stripped.to_string())
+    }
+}
+
+/// Vergleicht zwei kanonisierte Ganzzahl-Strings exakt (beliebige Präzision).
+fn compare_int_strings(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a_neg, a_digits) = (a.starts_with('-'), a.trim_start_matches('-'));
+    let (b_neg, b_digits) = (b.starts_with('-'), b.trim_start_matches('-'));
+    match (a_neg, b_neg) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => a_digits
+            .len()
+            .cmp(&b_digits.len())
+            .then_with(|| a_digits.cmp(b_digits)),
+        (true, true) => b_digits
+            .len()
+            .cmp(&a_digits.len())
+            .then_with(|| b_digits.cmp(a_digits)),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -56,12 +143,12 @@ pub enum FilterExpressionInner {
     Wildcard {
         key: Vec<String>,
         expected: String,
-        regex: Regex,
+        regex: FilterRegex,
     },
     Sigma {
         key: Vec<String>,
         expected: String,
-        regex: Regex,
+        regex: FilterRegex,
     },
     Integer {
         key: Vec<String>,
@@ -85,16 +172,23 @@ pub enum FilterExpressionInner {
         incl_low: bool,
         incl_high: bool,
     },
+    NumericRange {
+        key: Vec<String>,
+        lower: Option<NumericBound>,
+        upper: Option<NumericBound>,
+        incl_low: bool,
+        incl_high: bool,
+    },
     StringRange {
         key: Vec<String>,
-        lower: String,
-        upper: String,
+        lower: Option<String>,
+        upper: Option<String>,
         incl_low: bool,
         incl_high: bool,
     },
     Regex {
         key: Vec<String>,
-        pattern: Regex,
+        pattern: FilterRegex,
     },
     Exists {
         key: Vec<String>,
@@ -198,6 +292,28 @@ impl PartialEq for FilterExpressionInner {
                 },
             ) => a_k == b_k && a_l == b_l && a_u == b_u && a_il == b_il && a_ih == b_ih,
             (
+                Self::NumericRange {
+                    key: a_k,
+                    lower: a_l,
+                    upper: a_u,
+                    incl_low: a_il,
+                    incl_high: a_ih,
+                },
+                Self::NumericRange {
+                    key: b_k,
+                    lower: b_l,
+                    upper: b_u,
+                    incl_low: b_il,
+                    incl_high: b_ih,
+                },
+            ) => {
+                a_k == b_k
+                    && numeric_bound_eq(a_l, b_l)
+                    && numeric_bound_eq(a_u, b_u)
+                    && a_il == b_il
+                    && a_ih == b_ih
+            }
+            (
                 Self::StringRange {
                     key: a_k,
                     lower: a_l,
@@ -218,6 +334,19 @@ impl PartialEq for FilterExpressionInner {
             (Self::Null { key: a }, Self::Null { key: b }) => a == b,
             _ => false,
         }
+    }
+}
+
+/// Vergleicht zwei optionale numerische Grenzen auf Gleichheit.
+fn numeric_bound_eq(a: &Option<NumericBound>, b: &Option<NumericBound>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => match (x, y) {
+            (NumericBound::Int(s1), NumericBound::Int(s2)) => s1 == s2,
+            (NumericBound::Float(f1), NumericBound::Float(f2)) => f1 == f2,
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -279,12 +408,10 @@ impl FilterExpressionInner {
             Self::Wildcard { key, regex, .. } | Self::Sigma { key, regex, .. } => {
                 let value = get_json_value(key, document)?;
                 match value {
-                    Value::String(s) => Ok(regex.is_match(s)),
-                    Value::Array(arr) => {
-                        Ok(arr
-                            .iter()
-                            .any(|v| v.as_str().map_or(false, |s| regex.is_match(s))))
-                    }
+                    Value::String(s) => Ok(regex.is_match(s).unwrap_or(false)),
+                    Value::Array(arr) => Ok(arr
+                        .iter()
+                        .any(|v| v.as_str().map_or(false, |s| regex.is_match(s).unwrap_or(false)))),
                     _ => Ok(false),
                 }
             }
@@ -363,6 +490,55 @@ impl FilterExpressionInner {
                 }
             }
 
+            Self::NumericRange {
+                key,
+                lower,
+                upper,
+                incl_low,
+                incl_high,
+            } => {
+                let value = get_json_value(key, document)?;
+                let numeric = match value {
+                    Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            Some(NumericBound::Int(i.to_string()))
+                        } else {
+                            n.as_f64().map(NumericBound::Float)
+                        }
+                    }
+                    Value::String(s) => NumericBound::parse(s),
+                    _ => None,
+                };
+                match numeric {
+                    None => Ok(false),
+                    Some(v) => {
+                        let lo_ok = match lower {
+                            None => true,
+                            Some(lo) => {
+                                let ord = v.compare(lo);
+                                if *incl_low {
+                                    ord != std::cmp::Ordering::Less
+                                } else {
+                                    ord == std::cmp::Ordering::Greater
+                                }
+                            }
+                        };
+                        let hi_ok = match upper {
+                            None => true,
+                            Some(hi) => {
+                                let ord = v.compare(hi);
+                                if *incl_high {
+                                    ord != std::cmp::Ordering::Greater
+                                } else {
+                                    ord == std::cmp::Ordering::Less
+                                }
+                            }
+                        };
+                        Ok(lo_ok && hi_ok)
+                    }
+                }
+            }
+
             Self::StringRange {
                 key,
                 lower,
@@ -371,33 +547,50 @@ impl FilterExpressionInner {
                 incl_high,
             } => {
                 let value = get_json_value(key, document)?;
-                match value {
-                    Value::String(s) => {
-                        let lo_ok = if *incl_low {
-                            s.as_str() >= lower.as_str()
+                let string_value = match value {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            i.to_string()
+                        } else if let Some(f) = n.as_f64() {
+                            format_float(f)
                         } else {
-                            s.as_str() > lower.as_str()
-                        };
-                        let hi_ok = if *incl_high {
-                            s.as_str() <= upper.as_str()
-                        } else {
-                            s.as_str() < upper.as_str()
-                        };
-                        Ok(lo_ok && hi_ok)
+                            return Ok(false);
+                        }
                     }
-                    _ => Ok(false),
-                }
+                    _ => return Ok(false),
+                };
+                let s = string_value.as_str();
+                let lo_ok = match lower {
+                    None => true,
+                    Some(lo) => {
+                        if *incl_low {
+                            s >= lo.as_str()
+                        } else {
+                            s > lo.as_str()
+                        }
+                    }
+                };
+                let hi_ok = match upper {
+                    None => true,
+                    Some(hi) => {
+                        if *incl_high {
+                            s <= hi.as_str()
+                        } else {
+                            s < hi.as_str()
+                        }
+                    }
+                };
+                Ok(lo_ok && hi_ok)
             }
 
             Self::Regex { key, pattern } => {
                 let value = get_json_value(key, document)?;
                 match value {
-                    Value::String(s) => Ok(pattern.is_match(s)),
-                    Value::Array(arr) => {
-                        Ok(arr
-                            .iter()
-                            .any(|v| v.as_str().map_or(false, |s| pattern.is_match(s))))
-                    }
+                    Value::String(s) => Ok(pattern.is_match(s).unwrap_or(false)),
+                    Value::Array(arr) => Ok(arr
+                        .iter()
+                        .any(|v| v.as_str().map_or(false, |s| pattern.is_match(s).unwrap_or(false)))),
                     _ => Ok(false),
                 }
             }
@@ -475,13 +668,32 @@ impl FilterExpressionInner {
                     *incl_high,
                 )
             }
+            Self::NumericRange {
+                key,
+                lower,
+                upper,
+                incl_low,
+                incl_high,
+            } => {
+                let lo = lower
+                    .as_ref()
+                    .map_or("*".to_string(), |b| b.to_repr());
+                let hi = upper
+                    .as_ref()
+                    .map_or("*".to_string(), |b| b.to_repr());
+                range_repr(key, &lo, &hi, *incl_low, *incl_high)
+            }
             Self::StringRange {
                 key,
                 lower,
                 upper,
                 incl_low,
                 incl_high,
-            } => range_repr(key, lower, upper, *incl_low, *incl_high),
+            } => {
+                let lo = format_string_range_bound(lower.as_deref());
+                let hi = format_string_range_bound(upper.as_deref());
+                range_repr(key, &lo, &hi, *incl_low, *incl_high)
+            }
             Self::Regex { key, pattern } => {
                 let display = pattern
                     .as_str()
@@ -603,10 +815,24 @@ impl FilterExpressionInner {
                     incl_high: include_upper,
                 })
             }
+            "NumericRangeFilterExpression" => {
+                let key: Vec<String> = obj.getattr("key")?.extract()?;
+                let lower = numeric_bound_from_py(&obj.getattr("lower")?)?;
+                let upper = numeric_bound_from_py(&obj.getattr("upper")?)?;
+                let include_lower: bool = obj.getattr("include_lower")?.extract()?;
+                let include_upper: bool = obj.getattr("include_upper")?.extract()?;
+                Ok(FilterExpressionInner::NumericRange {
+                    key,
+                    lower,
+                    upper,
+                    incl_low: include_lower,
+                    incl_high: include_upper,
+                })
+            }
             "StringRangeFilterExpression" => {
                 let key: Vec<String> = obj.getattr("key")?.extract()?;
-                let lower: String = obj.getattr("lower")?.extract()?;
-                let upper: String = obj.getattr("upper")?.extract()?;
+                let lower: Option<String> = obj.getattr("lower")?.extract()?;
+                let upper: Option<String> = obj.getattr("upper")?.extract()?;
                 let include_lower: bool = obj.getattr("include_lower")?.extract()?;
                 let include_upper: bool = obj.getattr("include_upper")?.extract()?;
                 Ok(FilterExpressionInner::StringRange {
@@ -621,7 +847,7 @@ impl FilterExpressionInner {
                 let key: Vec<String> = obj.getattr("key")?.extract()?;
                 let raw: String = obj.getattr("expected_value")?.extract()?;
                 let normalized = normalize_regex(&raw);
-                let compiled = Regex::new(&normalized).map_err(|e| {
+                let compiled = FilterRegex::new(&normalized).map_err(|e| {
                     pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
                 })?;
                 Ok(FilterExpressionInner::Regex {
@@ -707,18 +933,36 @@ fn range_repr(key: &[String], lower: &str, upper: &str, incl_low: bool, incl_hig
     format!("{}:{}{} TO {}{}", dotted_key(key), lo, lower, upper, hi)
 }
 
+/// Formatiert eine String-Range-Grenze für die Repräsentation:
+/// offene Grenzen als "*", literale "*" und als Zahl parsebare Grenzen
+/// werden in Anführungszeichen gesetzt (wie Python: float() reicht, auch
+/// "nan"/"inf").
+fn format_string_range_bound(bound: Option<&str>) -> String {
+    match bound {
+        None => "*".to_string(),
+        Some("*") => "\"*\"".to_string(),
+        Some(b) => {
+            if b.parse::<f64>().is_ok() {
+                format!("\"{}\"", b)
+            } else {
+                b.to_string()
+            }
+        }
+    }
+}
+
 // ─── Hilfsfunktionen für Parser (exportiert für lucene.rs) ───
 
 /// Baut ein Regex aus einem Wildcard-Pattern (* → .*, ? → .?).
-pub fn build_wildcard_regex(pattern: &str) -> Result<Regex, String> {
+pub fn build_wildcard_regex(pattern: &str) -> Result<FilterRegex, String> {
     let full = wildcard_pattern(pattern);
-    Regex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
+    FilterRegex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
 }
 
 /// Baut ein case-insensitive Sigma-Regex aus einem Wildcard-Pattern.
-pub fn build_sigma_regex(pattern: &str) -> Result<Regex, String> {
+pub fn build_sigma_regex(pattern: &str) -> Result<FilterRegex, String> {
     let full = sigma_compiled_pattern(pattern);
-    Regex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
+    FilterRegex::new(&full).map_err(|e| format!("Invalid regex: {}", e))
 }
 
 /// Returns just the wildcard regex pattern string (without compiling).
@@ -748,11 +992,11 @@ fn replace_wildcard_matches(
 ) -> String {
     let find_pattern = format!(r"((?:\\)*\{})", wildcard_char);
     let split_pattern = format!(r"(?:\\)*\{0}", wildcard_char);
-    let wc_re = match Regex::new(&find_pattern) {
+    let wc_re = match StdRegex::new(&find_pattern) {
         Ok(r) => r,
         Err(_) => return escaped.to_string(),
     };
-    let split_re = match Regex::new(&split_pattern) {
+    let split_re = match StdRegex::new(&split_pattern) {
         Ok(r) => r,
         Err(_) => return escaped.to_string(),
     };
@@ -877,6 +1121,7 @@ impl PyFilterExpression {
             FilterExpressionInner::Float { .. } => "FloatFilterExpression",
             FilterExpressionInner::IntegerRange { .. } => "IntegerRangeFilterExpression",
             FilterExpressionInner::FloatRange { .. } => "FloatRangeFilterExpression",
+            FilterExpressionInner::NumericRange { .. } => "NumericRangeFilterExpression",
             FilterExpressionInner::StringRange { .. } => "StringRangeFilterExpression",
             FilterExpressionInner::Regex { .. } => "RegExFilterExpression",
             FilterExpressionInner::Exists { .. } => "Exists",
@@ -1016,16 +1261,20 @@ pub fn pydict_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::Array(arr))
     } else if obj.is_none() {
         Ok(Value::Null)
-    } else if let Ok(s) = obj.extract::<String>() {
-        Ok(Value::String(s))
+    } else if obj.is_instance_of::<pyo3::types::PyBool>() {
+        // bool muss vor int geprüft werden (Python: bool ist int-Subklasse)
+        Ok(Value::Bool(obj.extract::<bool>()?))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(Value::Number(i.into()))
+    } else if obj.is_instance_of::<pyo3::types::PyInt>() {
+        // Ganzzahl jenseits i64: als String behalten (beliebige Präzision)
+        Ok(Value::String(obj.to_string()))
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(Value::Number(
             serde_json::Number::from_f64(f).unwrap_or(0.into()),
         ))
-    } else if let Ok(b) = obj.extract::<bool>() {
-        Ok(Value::Bool(b))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(Value::String(s))
     } else {
         Ok(Value::String(obj.to_string()))
     }
@@ -1048,16 +1297,20 @@ fn pyany_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::Array(arr))
     } else if obj.is_none() {
         Ok(Value::Null)
-    } else if let Ok(s) = obj.extract::<String>() {
-        Ok(Value::String(s))
+    } else if obj.is_instance_of::<pyo3::types::PyBool>() {
+        // bool muss vor int geprüft werden (Python: bool ist int-Subklasse)
+        Ok(Value::Bool(obj.extract::<bool>()?))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(Value::Number(i.into()))
+    } else if obj.is_instance_of::<pyo3::types::PyInt>() {
+        // Ganzzahl jenseits i64: als String behalten (beliebige Präzision)
+        Ok(Value::String(obj.to_string()))
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(Value::Number(
             serde_json::Number::from_f64(f).unwrap_or(0.into()),
         ))
-    } else if let Ok(b) = obj.extract::<bool>() {
-        Ok(Value::Bool(b))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(Value::String(s))
     } else {
         Ok(Value::String(obj.to_string()))
     }
@@ -1074,6 +1327,7 @@ fn key_from_inner(inner: &FilterExpressionInner) -> PyResult<Vec<String>> {
         | FilterExpressionInner::Float { key, .. }
         | FilterExpressionInner::IntegerRange { key, .. }
         | FilterExpressionInner::FloatRange { key, .. }
+        | FilterExpressionInner::NumericRange { key, .. }
         | FilterExpressionInner::StringRange { key, .. }
         | FilterExpressionInner::Regex { key, .. }
         | FilterExpressionInner::Exists { key }
@@ -1303,20 +1557,84 @@ pub fn filter_expression_float_range(
     })
 }
 
+/// Extrahiert eine optionale numerische Grenze aus einem Python-Objekt
+/// (None, int oder float; Fließkommazahlen müssen endlich sein).
+fn numeric_bound_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Option<NumericBound>> {
+    if obj.is_none() {
+        return Ok(None);
+    }
+    if let Ok(i) = obj.extract::<i64>() {
+        return Ok(Some(NumericBound::Int(i.to_string())));
+    }
+    if obj.is_instance_of::<pyo3::types::PyInt>() {
+        // Ganzzahl jenseits i64: beliebige Präzision als String behalten
+        return Ok(Some(NumericBound::Int(obj.to_string())));
+    }
+    if let Ok(f) = obj.extract::<f64>() {
+        if !f.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Range boundaries must be finite",
+            ));
+        }
+        return Ok(Some(NumericBound::Float(f)));
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(
+        "Range boundaries must be int, float or None",
+    ))
+}
+
+/// Factory: NumericRangeFilterExpression.
+#[pyfunction]
+#[pyo3(signature = (key, lower, upper, include_lower = true, include_upper = true))]
+pub fn filter_expression_numeric_range(
+    key: Vec<String>,
+    lower: Option<&Bound<'_, PyAny>>,
+    upper: Option<&Bound<'_, PyAny>>,
+    include_lower: bool,
+    include_upper: bool,
+) -> PyResult<PyFilterExpression> {
+    let lower = match lower {
+        Some(obj) => numeric_bound_from_py(obj)?,
+        None => None,
+    };
+    let upper = match upper {
+        Some(obj) => numeric_bound_from_py(obj)?,
+        None => None,
+    };
+    if let (Some(lo), Some(hi)) = (&lower, &upper) {
+        if lo.compare(hi) == std::cmp::Ordering::Greater {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Range lower > upper",
+            ));
+        }
+    }
+    Ok(PyFilterExpression {
+        inner: FilterExpressionInner::NumericRange {
+            key,
+            lower,
+            upper,
+            incl_low: include_lower,
+            incl_high: include_upper,
+        },
+    })
+}
+
 /// Factory: StringRangeFilterExpression.
 #[pyfunction]
 #[pyo3(signature = (key, lower, upper, include_lower = true, include_upper = true))]
 pub fn filter_expression_string_range(
     key: Vec<String>,
-    lower: String,
-    upper: String,
+    lower: Option<String>,
+    upper: Option<String>,
     include_lower: bool,
     include_upper: bool,
 ) -> PyResult<PyFilterExpression> {
-    if lower > upper {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Range lower > upper",
-        ));
+    if let (Some(lo), Some(hi)) = (&lower, &upper) {
+        if lo > hi {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Range lower > upper",
+            ));
+        }
     }
     Ok(PyFilterExpression {
         inner: FilterExpressionInner::StringRange {
@@ -1337,7 +1655,7 @@ pub fn filter_expression_regex(
 ) -> PyResult<PyFilterExpression> {
     let normalized = normalize_regex(&regex_pattern);
     let compiled =
-        Regex::new(&normalized).map_err(|e| {
+        FilterRegex::new(&normalized).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
         })?;
     Ok(PyFilterExpression {
@@ -1528,7 +1846,7 @@ mod tests {
 
     #[test]
     fn regex_match() {
-        let pattern = Regex::new("^192\\.168\\..*$").unwrap();
+        let pattern = FilterRegex::new("^192\\.168\\..*$").unwrap();
         let expr = FilterExpressionInner::Regex {
             key: vec!["ip".into()],
             pattern,
@@ -1608,8 +1926,8 @@ mod tests {
     fn string_range_inclusive() {
         let expr = FilterExpressionInner::StringRange {
             key: vec!["status".into()],
-            lower: "alpha".into(),
-            upper: "zulu".into(),
+            lower: Some("alpha".into()),
+            upper: Some("zulu".into()),
             incl_low: true,
             incl_high: true,
         };
@@ -1744,7 +2062,7 @@ mod tests {
 
     #[test]
     fn to_repr_regex() {
-        let pattern = Regex::new("^foo.*bar$").unwrap();
+        let pattern = FilterRegex::new("^foo.*bar$").unwrap();
         let expr = FilterExpressionInner::Regex {
             key: vec!["ip".into()],
             pattern,
@@ -1784,7 +2102,7 @@ mod tests {
 
     #[test]
     fn regex_no_match() {
-        let pattern = Regex::new("^foo$").unwrap();
+        let pattern = FilterRegex::new("^foo$").unwrap();
         let expr = FilterExpressionInner::Regex {
             key: vec!["field".into()],
             pattern,

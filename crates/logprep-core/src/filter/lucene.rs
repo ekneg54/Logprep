@@ -1,9 +1,12 @@
+use std::sync::LazyLock;
+
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use regex::Regex;
 
 use super::expression::{
     build_sigma_regex, build_wildcard_regex, normalize_regex, FilterExpressionInner,
-    PyFilterExpression,
+    NumericBound, PyFilterExpression,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,8 +20,144 @@ impl std::fmt::Display for LuceneParseError {
 
 impl std::error::Error for LuceneParseError {}
 
+// ═══════════════════════════════════════════════════════════
+// Lucene-Escape-Protokoll (Port der Python-Helfer aus
+// logprep/filter/lucene_filter.py — add/remove lucene escaping)
+// ═══════════════════════════════════════════════════════════
+
+static QUOTE_ESCAPING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?:\\)+""#).unwrap());
+static LAST_QUOTATION_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"((?:\\)+")$"#).unwrap());
+static END_ESCAPING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"((?:\\)+"[\s\)]+(?:AND|OR|NOT|$))"#).unwrap());
+static FIND_UNESCAPING_QUOTE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?:\\)*""#).unwrap());
+static FIND_UNESCAPING_END_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:\\)*$").unwrap());
+
+/// Interleaves split-Teile mit Ersetzungen (wie Python zip_longest(split, matches)).
+fn interleave_split_matches(split: Vec<&str>, replacements: Vec<String>) -> String {
+    let mut result = String::new();
+    for (idx, part) in split.iter().enumerate() {
+        result.push_str(part);
+        if idx < replacements.len() {
+            result.push_str(&replacements[idx]);
+        }
+    }
+    result
+}
+
+/// Port von `LuceneFilter._make_uneven_double_quotes_escaping`:
+/// verdoppelt Backslash-Läufe vor Anführungszeichen und fügt eines hinzu.
+fn make_uneven_double_quotes_escaping(query_string: &str) -> String {
+    let mut replacements = Vec::new();
+    for m in QUOTE_ESCAPING_PATTERN.find_iter(query_string) {
+        let text = m.as_str();
+        let cnt_backslashes = text.len() - 1;
+        if cnt_backslashes > 0 {
+            replacements.push(format!("{}\\\"", "\\".repeat(2 * cnt_backslashes)));
+        } else {
+            replacements.push(text.to_string());
+        }
+    }
+    let split = QUOTE_ESCAPING_PATTERN.split(query_string).collect();
+    interleave_split_matches(split, replacements)
+}
+
+/// Port von `LuceneFilter._escape_ends_of_expressions`.
+fn escape_ends_of_expressions(query_string: &str) -> String {
+    // Python re.split mit Capturing Group: die Matches bleiben im Ergebnis.
+    let mut parts: Vec<String> = Vec::new();
+    let mut last_end = 0;
+    for m in END_ESCAPING_PATTERN.find_iter(query_string) {
+        parts.push(query_string[last_end..m.start()].to_string());
+        parts.push(m.as_str().to_string());
+        last_end = m.end();
+    }
+    parts.push(query_string[last_end..].to_string());
+
+    let mut new_string = String::new();
+    for part in parts.iter().filter(|p| !p.is_empty()) {
+        if END_ESCAPING_PATTERN.is_match(part) && part.starts_with('\\') {
+            let backslash_count = part.bytes().take_while(|&b| b == b'\\').count();
+            new_string.push_str(&"\\".repeat(backslash_count * 2));
+            new_string.push_str(&part[backslash_count..]);
+        } else {
+            new_string.push_str(part);
+        }
+    }
+    if let Some(m) = LAST_QUOTATION_PATTERN.find(&new_string) {
+        let cnt_backslashes = m.as_str().len() - 1;
+        let new_end = format!("{}\"", "\\".repeat(cnt_backslashes * 2));
+        new_string = format!("{}{}", &new_string[..m.start()], new_end);
+    }
+    new_string
+}
+
+/// Port von `LuceneFilter._add_lucene_escaping`.
+fn add_lucene_escaping(query_string: &str) -> String {
+    let s = make_uneven_double_quotes_escaping(query_string);
+    escape_ends_of_expressions(&s)
+}
+
+/// Port von `LuceneTransformer._remove_escaping_from_end_of_expression`.
+fn remove_escaping_from_end_of_expression(s: &str) -> String {
+    let mut string = s.to_string();
+    if let Some(m) = FIND_UNESCAPING_END_PATTERN.find(&string) {
+        let cnt = m.as_str().len();
+        string = format!("{}{}", &string[..m.start()], "\\".repeat(cnt / 2));
+        if let Some(m2) = FIND_UNESCAPING_END_PATTERN.find(&string) {
+            let cnt2 = m2.as_str().len();
+            let new_escaping = "\\".repeat(cnt2.saturating_sub(1) / 2);
+            string = format!("{}{}", &string[..m2.start()], new_escaping);
+        }
+    }
+    string
+}
+
+/// Port von `LuceneTransformer._remove_uneven_double_quotes_escaping`.
+fn remove_uneven_double_quotes_escaping(s: &str) -> String {
+    let mut replacements = Vec::new();
+    for m in FIND_UNESCAPING_QUOTE_PATTERN.find_iter(s) {
+        let text = m.as_str();
+        let cnt_backslashes = text.len() - 1;
+        if cnt_backslashes >= 3 {
+            let keep = (cnt_backslashes - 2) / 2;
+            replacements.push(format!("{}\\\"", &text[..keep]));
+        } else {
+            replacements.push(text.to_string());
+        }
+    }
+    let split = FIND_UNESCAPING_QUOTE_PATTERN.split(s).collect();
+    interleave_split_matches(split, replacements)
+}
+
+/// Port von `LuceneTransformer._remove_one_escaping_from_quotes`.
+fn remove_one_escaping_from_quotes(s: &str) -> String {
+    let mut replacements = Vec::new();
+    for m in FIND_UNESCAPING_QUOTE_PATTERN.find_iter(s) {
+        let text = m.as_str();
+        if text.len() > 1 {
+            replacements.push(text[1..].to_string());
+        } else {
+            replacements.push(text.to_string());
+        }
+    }
+    let split = FIND_UNESCAPING_QUOTE_PATTERN.split(s).collect();
+    interleave_split_matches(split, replacements)
+}
+
+/// Port von `LuceneTransformer._remove_lucene_escaping`.
+fn remove_lucene_escaping(s: &str) -> String {
+    let s = remove_escaping_from_end_of_expression(s);
+    let s = remove_uneven_double_quotes_escaping(&s);
+    remove_one_escaping_from_quotes(&s)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
+    #[allow(dead_code)]
     Field(String),
     Colon,
     LParen,
@@ -97,22 +236,36 @@ impl Lexer {
             let c = self.advance();
             match c {
                 Some('"') => return Ok(value),
-                Some('\\') => match self.advance() {
-                    Some('"') => value.push('"'),
-                    Some('\\') => value.push('\\'),
-                    Some('n') => value.push('\n'),
-                    Some('t') => value.push('\t'),
-                    Some('r') => value.push('\r'),
-                    Some(c) => {
+                Some('\\') => {
+                    let mut slash_count = 1;
+                    while self.peek() == Some('\\') {
+                        self.advance();
+                        slash_count += 1;
+                    }
+                    for _ in 0..slash_count {
                         value.push('\\');
-                        value.push(c);
                     }
-                    None => {
-                        return Err(LuceneParseError(
-                            "Unterminated escape in quoted string".to_string(),
-                        ))
+                    match self.peek() {
+                        Some('"') => {
+                            if slash_count % 2 == 1 {
+                                value.push('"');
+                                self.advance();
+                            } else {
+                                self.advance();
+                                return Ok(value);
+                            }
+                        }
+                        Some(next) => {
+                            value.push(next);
+                            self.advance();
+                        }
+                        None => {
+                            return Err(LuceneParseError(
+                                "Unterminated escape in quoted string".to_string(),
+                            ))
+                        }
                     }
-                },
+                }
                 Some(c) => value.push(c),
                 None => {
                     return Err(LuceneParseError("Unterminated quoted string".to_string()))
@@ -234,7 +387,17 @@ impl Lexer {
                         "TO" => tokens.push(Token::To),
                         "*" => tokens.push(Token::Star),
                         "re" => tokens.push(Token::Re),
-                        _ => tokens.push(Token::Word { value, raw }),
+                        _ => {
+                            // Ein Wort direkt vor '(' ist nicht erlaubt — die
+                            // Klammer muss escaped werden (wie bei luqum).
+                            if self.peek() == Some('(') {
+                                return Err(LuceneParseError(
+                                    "Illegal character '(' - expression not escaped correctly"
+                                        .to_string(),
+                                ));
+                            }
+                            tokens.push(Token::Word { value, raw })
+                        }
                     }
                 }
                 _ => {
@@ -251,6 +414,14 @@ struct Parser {
     pos: usize,
     field_group_key: Option<Vec<String>>,
     special_fields: SpecialFields,
+}
+
+/// Eine geparste Range-Grenze: Wert (None = offene Grenze `*`),
+/// Originaltext (für Fehlermeldungen) und ob sie quotet war.
+struct RangeBoundary {
+    value: Option<String>,
+    raw: String,
+    quoted: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -317,7 +488,14 @@ impl Parser {
     }
 
     fn parse(&mut self) -> Result<FilterExpressionInner, LuceneParseError> {
-        self.parse_or()
+        let expr = self.parse_or()?;
+        match self.peek() {
+            Token::Eof => Ok(expr),
+            tok => Err(LuceneParseError(format!(
+                "Unexpected trailing token: {:?}",
+                tok
+            ))),
+        }
     }
 
     fn parse_or(&mut self) -> Result<FilterExpressionInner, LuceneParseError> {
@@ -404,6 +582,9 @@ impl Parser {
                 self.field_group_key = saved;
                 Ok(expr)
             }
+            Token::Eof => Err(LuceneParseError(
+                "unexpected end of expression".to_string(),
+            )),
             _ => Err(LuceneParseError(format!(
                 "Unexpected token: {:?}",
                 self.peek()
@@ -465,7 +646,7 @@ impl Parser {
             }
             FilterExpressionInner::Regex { pattern, .. } => {
                 let normalized = normalize_regex(pattern.as_str());
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: key.to_vec(),
@@ -552,7 +733,7 @@ impl Parser {
 
                 if self.field_group_key.is_some() {
                     let normalized = normalize_regex(&pattern);
-                    let compiled = regex::Regex::new(&normalized)
+                    let compiled = fancy_regex::Regex::new(&normalized)
                         .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                     if let Some(fg_key) = &self.field_group_key.clone() {
                         return Ok(FilterExpressionInner::Regex {
@@ -567,7 +748,7 @@ impl Parser {
                 }
 
                 let normalized = normalize_regex(&pattern);
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: vec![],
@@ -608,7 +789,7 @@ impl Parser {
                 let s = s.clone();
                 self.advance();
                 let normalized = normalize_regex(&s);
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: key.to_vec(),
@@ -619,7 +800,7 @@ impl Parser {
                 let p = p.clone();
                 self.advance();
                 let normalized = normalize_regex(&p);
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: key.to_vec(),
@@ -630,7 +811,7 @@ impl Parser {
                 let raw = raw.clone();
                 self.advance();
                 let normalized = normalize_regex(&raw);
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: key.to_vec(),
@@ -679,7 +860,7 @@ impl Parser {
                 let p = p.clone();
                 self.advance();
                 let normalized = normalize_regex(&p);
-                let compiled = regex::Regex::new(&normalized)
+                let compiled = fancy_regex::Regex::new(&normalized)
                     .map_err(|e| LuceneParseError(format!("Invalid regex: {}", e)))?;
                 Ok(FilterExpressionInner::Regex {
                     key: key.to_vec(),
@@ -726,6 +907,9 @@ impl Parser {
                 Ok(FilterExpressionInner::Always { value: true })
             }
             Token::LBracket | Token::LBrace => self.parse_range(key, ""),
+            Token::Eof => Err(LuceneParseError(
+                "unexpected end of expression".to_string(),
+            )),
             _ => Err(LuceneParseError(format!(
                 "Unexpected value token: {:?}",
                 val_tok
@@ -773,6 +957,11 @@ impl Parser {
     ) -> Result<FilterExpressionInner, LuceneParseError> {
         if let Some(fg_key) = &self.field_group_key.clone() {
             Ok(self.create_string_expr(fg_key, word, raw_word, is_quoted))
+        } else if is_quoted {
+            Ok(FilterExpressionInner::String {
+                key: vec![],
+                expected: remove_lucene_escaping(word),
+            })
         } else {
             Ok(FilterExpressionInner::String {
                 key: vec![],
@@ -789,9 +978,18 @@ impl Parser {
         is_quoted: bool,
     ) -> FilterExpressionInner {
         let dotted = dotted_field_list(key);
+        let cleaned_value;
+        let cleaned_raw;
+        let (value, raw_value) = if is_quoted {
+            cleaned_value = remove_lucene_escaping(value);
+            cleaned_raw = remove_lucene_escaping(raw_value);
+            (cleaned_value.as_str(), cleaned_raw.as_str())
+        } else {
+            (value, raw_value)
+        };
         if is_quoted && self.special_fields.regex_all {
             let normalized = normalize_regex(raw_value);
-            if let Ok(compiled) = regex::Regex::new(&normalized) {
+            if let Ok(compiled) = fancy_regex::Regex::new(&normalized) {
                 return FilterExpressionInner::Regex {
                     key: key.to_vec(),
                     pattern: compiled,
@@ -801,7 +999,7 @@ impl Parser {
         if is_quoted && !self.special_fields.regex_fields.is_empty() {
             if self.special_fields.regex_fields.contains(&dotted) {
                 let normalized = normalize_regex(raw_value);
-                if let Ok(compiled) = regex::Regex::new(&normalized) {
+                if let Ok(compiled) = fancy_regex::Regex::new(&normalized) {
                     return FilterExpressionInner::Regex {
                         key: key.to_vec(),
                         pattern: compiled,
@@ -832,7 +1030,7 @@ impl Parser {
         if !is_quoted && !self.special_fields.regex_fields.is_empty() {
             if self.special_fields.regex_fields.contains(&dotted) {
                 let normalized = normalize_regex(raw_value);
-                if let Ok(compiled) = regex::Regex::new(&normalized) {
+                if let Ok(compiled) = fancy_regex::Regex::new(&normalized) {
                     return FilterExpressionInner::Regex {
                         key: key.to_vec(),
                         pattern: compiled,
@@ -876,7 +1074,11 @@ impl Parser {
         let lower = if first_boundary.is_empty() {
             self.parse_range_boundary()?
         } else {
-            first_boundary.to_string()
+            RangeBoundary {
+                value: Some(first_boundary.to_string()),
+                raw: first_boundary.to_string(),
+                quoted: false,
+            }
         };
 
         let tok = self.advance();
@@ -896,104 +1098,150 @@ impl Parser {
             )));
         }
 
-        if lower == "*" || upper == "*" {
-            return Err(LuceneParseError(format!(
-                "Open ranges are not supported: [{} TO {}]",
-                lower, upper
-            )));
+        let raw_range = format!(
+            "{}{} TO {}{}",
+            if incl_low { "[" } else { "{" },
+            lower.raw,
+            upper.raw,
+            if incl_high { "]" } else { "}" },
+        );
+
+        // [* TO *] übersetzt sich zu "Feld existiert"
+        if lower.value.is_none() && upper.value.is_none() {
+            return Ok(FilterExpressionInner::Exists { key: key.to_vec() });
         }
 
-        if let (Ok(lo_i), Ok(hi_i)) = (lower.parse::<i64>(), upper.parse::<i64>()) {
-            if lo_i > hi_i {
-                return Err(LuceneParseError(format!(
-                    "The lower range boundary must not exceed the upper range boundary: [{} TO {}]",
-                    lower, upper
-                )));
+        let reversed_error = || {
+            LuceneParseError(format!(
+                "The lower range boundary must not exceed the upper range boundary: \"{}\"",
+                raw_range
+            ))
+        };
+
+        // Ein quotete Grenze erzwingt den lexikographischen String-Vergleich
+        let quoted = lower.quoted || upper.quoted;
+
+        if !quoted {
+            let lower_num = lower.value.as_ref().and_then(|s| NumericBound::parse(s));
+            let upper_num = upper.value.as_ref().and_then(|s| NumericBound::parse(s));
+            let all_numeric = lower.value.is_none() || lower_num.is_some();
+            let all_numeric = all_numeric && (upper.value.is_none() || upper_num.is_some());
+            if all_numeric {
+                if let (Some(lo), Some(hi)) = (&lower_num, &upper_num) {
+                    if lo.compare(hi) == std::cmp::Ordering::Greater {
+                        return Err(reversed_error());
+                    }
+                }
+                return Ok(FilterExpressionInner::NumericRange {
+                    key: key.to_vec(),
+                    lower: lower_num,
+                    upper: upper_num,
+                    incl_low,
+                    incl_high,
+                });
             }
-            return Ok(FilterExpressionInner::IntegerRange {
-                key: key.to_vec(),
-                lower: lo_i,
-                upper: hi_i,
-                incl_low,
-                incl_high,
-            });
         }
 
-        if let (Ok(lo_f), Ok(hi_f)) = (lower.parse::<f64>(), upper.parse::<f64>()) {
-            if !lo_f.is_finite() || !hi_f.is_finite() {
-                return Err(LuceneParseError(
-                    "Range boundaries must be finite numbers".to_string(),
-                ));
+        if let (Some(lo), Some(hi)) = (&lower.value, &upper.value) {
+            if lo > hi {
+                return Err(reversed_error());
             }
-            if lo_f > hi_f {
-                return Err(LuceneParseError(format!(
-                    "The lower range boundary must not exceed the upper range boundary: [{} TO {}]",
-                    lower, upper
-                )));
-            }
-            return Ok(FilterExpressionInner::FloatRange {
-                key: key.to_vec(),
-                lower: lo_f,
-                upper: hi_f,
-                incl_low,
-                incl_high,
-            });
-        }
-
-        if lower.parse::<f64>().is_ok() || upper.parse::<f64>().is_ok() {
-            return Err(LuceneParseError(format!(
-                "Mixed numeric and string range boundaries are not supported: [{} TO {}]",
-                lower, upper
-            )));
-        }
-
-        if lower > upper {
-            return Err(LuceneParseError(format!(
-                "The lower range boundary must not exceed the upper range boundary: [{} TO {}]",
-                lower, upper
-            )));
         }
 
         Ok(FilterExpressionInner::StringRange {
             key: key.to_vec(),
-            lower,
-            upper,
+            lower: lower.value,
+            upper: upper.value,
             incl_low,
             incl_high,
         })
     }
 
-    fn parse_range_boundary(&mut self) -> Result<String, LuceneParseError> {
-        match self.peek().clone() {
-            Token::Word { value, .. } => {
+    fn parse_range_boundary(&mut self) -> Result<RangeBoundary, LuceneParseError> {
+        let (negative, mut value, mut raw, quoted) = match self.peek().clone() {
+            Token::Word { value, raw } => {
                 self.advance();
-                Ok(value)
+                (false, value, raw, false)
             }
             Token::StringLit(s) => {
                 self.advance();
-                Ok(s)
+                // raw rekonstruiert die ursprüngliche quotete Form
+                return Ok(RangeBoundary {
+                    raw: format!("\"{}\"", s),
+                    value: Some(s),
+                    quoted: true,
+                });
             }
             Token::Star => {
                 self.advance();
-                Ok("*".to_string())
+                // unquotetes '*' ist eine offene Grenze
+                return Ok(RangeBoundary {
+                    value: None,
+                    raw: "*".to_string(),
+                    quoted: false,
+                });
             }
             Token::Minus => {
                 self.advance();
                 match self.peek().clone() {
-                    Token::Word { value, .. } => {
+                    Token::Word { value, raw } => {
                         self.advance();
-                        Ok(format!("-{}", value))
+                        (true, value, raw, false)
                     }
-                    _ => Err(LuceneParseError(
-                        "Expected value after '-' in range".to_string(),
-                    )),
+                    _ => {
+                        return Err(LuceneParseError(
+                            "Expected value after '-' in range".to_string(),
+                        ))
+                    }
                 }
             }
-            _ => Err(LuceneParseError(format!(
-                "Invalid range boundary: {:?}",
-                self.peek()
-            ))),
+            _ => {
+                return Err(LuceneParseError(format!(
+                    "Invalid range boundary: {:?}",
+                    self.peek()
+                )))
+            }
+        };
+
+        // Doppelpunkte innerhalb unquoteter Grenzen (z.B. ISO-8601-Timestamps)
+        // werden wieder zusammengesetzt.
+        while matches!(self.peek(), Token::Colon) {
+            self.advance();
+            match self.peek().clone() {
+                Token::Word { value: v, raw: r } => {
+                    self.advance();
+                    value.push(':');
+                    value.push_str(&v);
+                    raw.push(':');
+                    raw.push_str(&r);
+                }
+                _ => {
+                    return Err(LuceneParseError(
+                        "Invalid range boundary after ':'".to_string(),
+                    ))
+                }
+            }
         }
+
+        if negative {
+            value = format!("-{}", value);
+            raw = format!("-{}", raw);
+        }
+
+        // Unquotete Grenzen mit '+' (z.B. ISO-8601-Offsets) müssen — wie bei
+        // luqum — quotet werden.
+        if value.contains('+') {
+            return Err(LuceneParseError(
+                "Illegal character '+' in range boundary - expression not escaped correctly"
+                    .to_string(),
+            ));
+        }
+
+        Ok(RangeBoundary {
+            value: Some(value),
+            raw,
+            quoted,
+        })
     }
 }
 
@@ -1017,7 +1265,8 @@ pub fn parse_lucene_query_inner(
     } else {
         SpecialFields::default()
     };
-    let mut lexer = Lexer::new(query_string);
+    let escaped = add_lucene_escaping(query_string);
+    let mut lexer = Lexer::new(&escaped);
     let tokens = lexer.tokenize()?;
     let mut parser = Parser::new(tokens, sf);
     parser.parse()
@@ -1036,7 +1285,8 @@ pub fn parse_lucene_query(
     } else {
         SpecialFields::default()
     };
-    let mut lexer = Lexer::new(query_string);
+    let escaped = add_lucene_escaping(query_string);
+    let mut lexer = Lexer::new(&escaped);
     let tokens = lexer
         .tokenize()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.0))?;
@@ -1160,10 +1410,10 @@ mod tests {
     fn integer_range() {
         assert_eq!(
             parse("key:[18 TO 65]"),
-            FilterExpressionInner::IntegerRange {
+            FilterExpressionInner::NumericRange {
                 key: vec!["key".into()],
-                lower: 18,
-                upper: 65,
+                lower: Some(NumericBound::Int("18".into())),
+                upper: Some(NumericBound::Int("65".into())),
                 incl_low: true,
                 incl_high: true,
             }
@@ -1174,10 +1424,10 @@ mod tests {
     fn float_range() {
         assert_eq!(
             parse("key:[0.1 TO 8.5]"),
-            FilterExpressionInner::FloatRange {
+            FilterExpressionInner::NumericRange {
                 key: vec!["key".into()],
-                lower: 0.1,
-                upper: 8.5,
+                lower: Some(NumericBound::Float(0.1)),
+                upper: Some(NumericBound::Float(8.5)),
                 incl_low: true,
                 incl_high: true,
             }
@@ -1188,10 +1438,10 @@ mod tests {
     fn exclusive_range() {
         assert_eq!(
             parse("key:{18 TO 65}"),
-            FilterExpressionInner::IntegerRange {
+            FilterExpressionInner::NumericRange {
                 key: vec!["key".into()],
-                lower: 18,
-                upper: 65,
+                lower: Some(NumericBound::Int("18".into())),
+                upper: Some(NumericBound::Int("65".into())),
                 incl_low: false,
                 incl_high: false,
             }
@@ -1202,10 +1452,10 @@ mod tests {
     fn mixed_range() {
         assert_eq!(
             parse("key:[18 TO 65}"),
-            FilterExpressionInner::IntegerRange {
+            FilterExpressionInner::NumericRange {
                 key: vec!["key".into()],
-                lower: 18,
-                upper: 65,
+                lower: Some(NumericBound::Int("18".into())),
+                upper: Some(NumericBound::Int("65".into())),
                 incl_low: true,
                 incl_high: false,
             }
@@ -1218,8 +1468,8 @@ mod tests {
             parse("key:[alpha TO zulu]"),
             FilterExpressionInner::StringRange {
                 key: vec!["key".into()],
-                lower: "alpha".into(),
-                upper: "zulu".into(),
+                lower: Some("alpha".into()),
+                upper: Some("zulu".into()),
                 incl_low: true,
                 incl_high: true,
             }
@@ -1269,10 +1519,10 @@ mod tests {
     fn negative_range_boundary() {
         assert_eq!(
             parse("key:[-10 TO -1]"),
-            FilterExpressionInner::IntegerRange {
+            FilterExpressionInner::NumericRange {
                 key: vec!["key".into()],
-                lower: -10,
-                upper: -1,
+                lower: Some(NumericBound::Int("-10".into())),
+                upper: Some(NumericBound::Int("-1".into())),
                 incl_low: true,
                 incl_high: true,
             }
@@ -1353,9 +1603,27 @@ mod tests {
     }
 
     #[test]
-    fn open_range_raises() {
-        let result = try_parse("key:[* TO 10]");
-        assert!(result.is_err(), "Expected error for open range");
+    fn open_range_is_unbounded_numeric_range() {
+        assert_eq!(
+            parse("key:[* TO 10]"),
+            FilterExpressionInner::NumericRange {
+                key: vec!["key".into()],
+                lower: None,
+                upper: Some(NumericBound::Int("10".into())),
+                incl_low: true,
+                incl_high: true,
+            }
+        );
+    }
+
+    #[test]
+    fn fully_open_range_is_exists() {
+        assert_eq!(
+            parse("key:[* TO *]"),
+            FilterExpressionInner::Exists {
+                key: vec!["key".into()],
+            }
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
 # `logprep._rust.processor` is registered at runtime by the Rust extension;
 # pylint cannot resolve the submodule statically.
 
+import inspect
 import logging
 import typing
 from abc import abstractmethod
@@ -181,10 +182,25 @@ class Processor(Component):
     def _apply_rule_in_python(self, rule_id: int, event: dict) -> None:
         """Apply a single matched rule via the Python callback.
 
-        Called by the Rust core once per matched rule id.
+        Called by the Rust core once per matched rule id. `_apply_rules` is
+        declared `async`, but processors must not actually suspend: the core
+        invokes this hook synchronously, so the coroutine is driven to
+        completion here. Exceptions raised by the rule propagate to the core,
+        which classifies them into warnings and errors.
         """
         rule = self._rule_tree.rule_id_to_rule[rule_id]
-        self._apply_rules(event, rule)
+        result = self._apply_rules(event, rule)
+        if not inspect.iscoroutine(result):
+            return
+        try:
+            result.send(None)
+        except StopIteration:
+            return
+        result.close()
+        raise RuntimeError(
+            f"{self.name}: _apply_rules suspended on await, "
+            "but the Rust processor core only supports synchronous rule execution"
+        )
 
     @abstractmethod
     async def _apply_rules(self, event: dict, rule: "Rule"): ...  # pragma: no cover

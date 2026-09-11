@@ -95,7 +95,6 @@ class TestLueceneFilter:
     def test_created_filter_matches_document_with_newline_in_key(self):
         assert LuceneFilter.create('k\ney: "x"')
 
-    @pytest.mark.xfail(reason="luqum does not allow escaping newlines in keys", strict=True)
     def test_created_filter_matches_document_with_escaped_newline_in_key(self):
         assert LuceneFilter.create('a\\\nkey: "x"').matches({"a\nkey": "x"})
 
@@ -514,16 +513,13 @@ class TestLueceneFilter:
     create_filter_fail_test_cases = [
         pytest.param(
             '"',
-            "Illegal character '\"' at position 7 in 'foo: \"\"\"' - "
-            + "expression not escaped correctly",
+            "Unterminated quoted string",
             id="One not escaped quotation",
         ),
-        pytest.param(
-            '""', 'The expression "foo: """"" is invalid!', id="Two not escaped quotation"
-        ),
+        pytest.param('""', "Unexpected trailing token", id="Two not escaped quotation"),
         pytest.param(
             '" bar',
-            'The expression "foo: "" bar"" is invalid!',
+            "Unexpected trailing token",
             id="Quotation doesn't end with AND/OR/NOT/$",
         ),
     ]

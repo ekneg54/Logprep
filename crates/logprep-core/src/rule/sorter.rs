@@ -40,6 +40,7 @@ impl RuleSorterInner {
             | FilterExpressionInner::Float { key, .. }
             | FilterExpressionInner::IntegerRange { key, .. }
             | FilterExpressionInner::FloatRange { key, .. }
+            | FilterExpressionInner::NumericRange { key, .. }
             | FilterExpressionInner::StringRange { key, .. }
             | FilterExpressionInner::Regex { key, .. }
             | FilterExpressionInner::Exists { key }
