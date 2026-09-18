@@ -9,6 +9,6 @@ resolver = "2"
 # des ProcessorCore, die eine echte Python-Interpreter-Instanz brauchen).
 pyo3 = { version = "0.25" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 fancy-regex = "0.14"

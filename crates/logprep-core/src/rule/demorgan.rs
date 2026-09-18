@@ -8,15 +8,11 @@ impl DeMorganResolverInner {
             FilterExpressionInner::Not { child } => Self::resolve_not(child),
             FilterExpressionInner::And { children } => {
                 let resolved: Vec<_> = children.iter().map(Self::resolve).collect();
-                FilterExpressionInner::And {
-                    children: resolved,
-                }
+                FilterExpressionInner::And { children: resolved }
             }
             FilterExpressionInner::Or { children } => {
                 let resolved: Vec<_> = children.iter().map(Self::resolve).collect();
-                FilterExpressionInner::Or {
-                    children: resolved,
-                }
+                FilterExpressionInner::Or { children: resolved }
             }
             other => other.clone(),
         }
@@ -34,9 +30,7 @@ impl DeMorganResolverInner {
                         })
                     })
                     .collect();
-                FilterExpressionInner::Or {
-                    children: negated,
-                }
+                FilterExpressionInner::Or { children: negated }
             }
             FilterExpressionInner::Or { children } => {
                 let negated: Vec<_> = children
@@ -47,9 +41,7 @@ impl DeMorganResolverInner {
                         })
                     })
                     .collect();
-                FilterExpressionInner::And {
-                    children: negated,
-                }
+                FilterExpressionInner::And { children: negated }
             }
             other => FilterExpressionInner::Not {
                 child: Box::new(Self::resolve(other)),

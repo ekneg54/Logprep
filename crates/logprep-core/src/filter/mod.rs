@@ -6,12 +6,12 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
 use self::expression::{
-    filter_expression, filter_expression_and, filter_expression_exists,
+    PyFilterExpression, filter_expression, filter_expression_and, filter_expression_exists,
     filter_expression_float, filter_expression_float_range, filter_expression_integer,
     filter_expression_integer_range, filter_expression_not, filter_expression_null,
     filter_expression_numeric_range, filter_expression_or, filter_expression_regex,
     filter_expression_sigma, filter_expression_string, filter_expression_string_range,
-    filter_expression_wildcard, PyFilterExpression,
+    filter_expression_wildcard,
 };
 use self::lucene::parse_lucene_query;
 

@@ -43,21 +43,35 @@ impl RuleSegmenterInner {
                     if seg.len() == 1 && seg[0].len() == 1 {
                         cnf_clauses.push(seg[0][0].clone());
                     } else if seg.len() == 1 {
-                        let and_children: Vec<_> = seg[0].iter().map(|e| {
-                            if matches!(e, FilterExpressionInner::And { .. }) {
-                                e.clone()
-                            } else { e.clone() }
-                        }).collect();
-                        cnf_clauses.push(FilterExpressionInner::And { children: and_children });
+                        let and_children: Vec<_> = seg[0]
+                            .iter()
+                            .map(|e| {
+                                if matches!(e, FilterExpressionInner::And { .. }) {
+                                    e.clone()
+                                } else {
+                                    e.clone()
+                                }
+                            })
+                            .collect();
+                        cnf_clauses.push(FilterExpressionInner::And {
+                            children: and_children,
+                        });
                     } else {
-                        let or_children: Vec<_> = seg.iter().map(|branch| {
-                            if branch.len() == 1 {
-                                branch[0].clone()
-                            } else {
-                                FilterExpressionInner::And { children: branch.clone() }
-                            }
-                        }).collect();
-                        cnf_clauses.push(FilterExpressionInner::Or { children: or_children });
+                        let or_children: Vec<_> = seg
+                            .iter()
+                            .map(|branch| {
+                                if branch.len() == 1 {
+                                    branch[0].clone()
+                                } else {
+                                    FilterExpressionInner::And {
+                                        children: branch.clone(),
+                                    }
+                                }
+                            })
+                            .collect();
+                        cnf_clauses.push(FilterExpressionInner::Or {
+                            children: or_children,
+                        });
                     }
                 }
                 CnfToDnfConverterInner::convert(&cnf_clauses)
@@ -211,11 +225,9 @@ mod tests {
         assert_eq!(dnf.len(), 2, "DNF should have 2 OR branches");
         for branch in &dnf {
             assert_eq!(branch.len(), 2, "Each branch should have 2 AND expressions");
-            assert!(
-                branch
-                    .iter()
-                    .any(|e| matches!(e, FilterExpressionInner::String { expected, .. } if expected == "3"))
-            );
+            assert!(branch.iter().any(
+                |e| matches!(e, FilterExpressionInner::String { expected, .. } if expected == "3")
+            ));
         }
     }
 }

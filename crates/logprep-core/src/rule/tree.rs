@@ -23,11 +23,7 @@ impl TreeInner {
         self.rule_count += 1;
     }
 
-    fn add_rule_to_node(
-        node: &mut NodeInner,
-        segments: &[FilterExpressionInner],
-        rule_id: u64,
-    ) {
+    fn add_rule_to_node(node: &mut NodeInner, segments: &[FilterExpressionInner], rule_id: u64) {
         if segments.is_empty() {
             if !node.matching_rule_ids.contains(&rule_id) {
                 node.matching_rule_ids.push(rule_id);
@@ -35,9 +31,10 @@ impl TreeInner {
             return;
         }
         let expr = &segments[0];
-        let found_idx = node.children.iter().position(|child| {
-            child.expression.as_ref().map_or(false, |e| e == expr)
-        });
+        let found_idx = node
+            .children
+            .iter()
+            .position(|child| child.expression.as_ref().map_or(false, |e| e == expr));
         if let Some(idx) = found_idx {
             Self::add_rule_to_node(&mut node.children[idx], &segments[1..], rule_id);
         } else {

@@ -90,8 +90,14 @@ mod tests {
         let result = RuleParserInner::parse(&expr, &priority, &tag_map);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].len(), 2);
-        assert!(matches!(&result[0][0], FilterExpressionInner::Exists { .. }));
-        assert!(matches!(&result[0][1], FilterExpressionInner::String { .. }));
+        assert!(matches!(
+            &result[0][0],
+            FilterExpressionInner::Exists { .. }
+        ));
+        assert!(matches!(
+            &result[0][1],
+            FilterExpressionInner::String { .. }
+        ));
     }
 
     #[test]

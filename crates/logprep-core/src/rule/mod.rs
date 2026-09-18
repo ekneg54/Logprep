@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::filter::expression::{
-    pydict_to_json, FilterExpressionInner, PyFilterExpression,
-};
+use crate::filter::expression::{FilterExpressionInner, PyFilterExpression, pydict_to_json};
 
 use self::parser::RuleParserInner;
 use self::tree::TreeInner;

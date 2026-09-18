@@ -238,7 +238,7 @@ In Phase 4试过 der挫败en Variante wurde `async def process` pro Processor ü
 
 ## Phase 4: Processor-RuleSpecs (Einfache Processor)
 
-**Ziel**: Die neun einfache, rechenintensive Prozessoren werden — pro Processor durch ein `RuleSpec`-Struct mit `apply(&mut Value)` — in Rust migriert. Die Orchestrierung (Matching, Warning-Handling, `delete_source_fields`, Metrik-Zählung) liegt seit Phase 3.5 im gemeinsamen `ProcessorCore`; Phase 4 belegt lediglich die `rule_specs`-Tabelle des Cores pro migriertem Processor. Sobald ein `RuleSpec`-Eintrag existiert, entfällt für diesen Processor der Python-Callback-Pfad aus 3.5. **Keine `process()`-Methode eines Phase-4-Prozessors旁路iert die ABC** — die ABC ruft weiterhin `self._core.process(...)`, der Core dispatcht an `RuleSpec::apply`. Die in Phase 1 migrierten Helper (`pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, …) werden in Phase 4 wiederverwendet, nicht neu implementiert. Sämtliche externen Python-Bibliotheken der neun priorisierten Prozessoren (`pyparsing`, `msgspec`, `base64`, Python-`re`, `dataclasses`, `functools.partial`, `functools.cached_property`, `timeout`-Decorator) werden durch Rust-Crates oder direkt in Rust geschriebenen Code ersetzt — **mit Ausnahme von `attrs`**, das an den Python-`Rule`-Klassen für die externe Introspection-API erhalten bleibt (siehe Leitprinzip 3).
+**Ziel**: Die neun einfache, rechenintensive Prozessoren werden — pro Processor durch ein `RuleSpec`-Struct mit `apply(&mut Value)` — in Rust migriert. Schritt 4i erweitert die Phase auf alle verbleibenden 23 ng-Prozessoren (Wellen A–C; I/O-/ML-Prozessoren der Gruppe D bleiben vorerst im Callback-Pfad). Die Orchestrierung (Matching, Warning-Handling, `delete_source_fields`, Metrik-Zählung) liegt seit Phase 3.5 im gemeinsamen `ProcessorCore`; Phase 4 belegt lediglich die `rule_specs`-Tabelle des Cores pro migriertem Processor. Sobald ein `RuleSpec`-Eintrag existiert, entfällt für diesen Processor der Python-Callback-Pfad aus 3.5. **Keine `process()`-Methode eines Phase-4-Prozessors旁路iert die ABC** — die ABC ruft weiterhin `self._core.process(...)`, der Core dispatcht an `RuleSpec::apply`. Die in Phase 1 migrierten Helper (`pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, …) werden in Phase 4 wiederverwendet, nicht neu implementiert. Sämtliche externen Python-Bibliotheken der neun priorisierten Prozessoren (`pyparsing`, `msgspec`, `base64`, Python-`re`, `dataclasses`, `functools.partial`, `functools.cached_property`, `timeout`-Decorator) werden durch Rust-Crates oder direkt in Rust geschriebenen Code ersetzt — **mit Ausnahme von `attrs`**, das an den Python-`Rule`-Klassen für die externe Introspection-API erhalten bleibt (siehe Leitprinzip 3).
 
 **Begründung**:
 - Nach Phase 3.5 läuft die Orchestrierung bereits in Rust; der verbleibende Python-Overhead pro Event ist der Callback-Roundtrip für un-migrierte Prozessoren. Phase 4 beseitigt diesen Roundtrip für die neun priorisierten Prozessoren, indem `apply` direkt in Rust läuft.
@@ -312,6 +312,14 @@ Python: Processor.process(event)                      # ABC unverändert (Phase 
 | `logprep.util.decorators.timeout` | `calculator/processor.py` | `std::sync::mpsc::channel` + `std::thread::spawn` + `recv_timeout` | nativ |
 | `logprep.util.helper` (Python-Wrapper) | Alle `processor.py` | `field::value::*` (pure Rust, wiederverwendet) | bereits in Phase 1 migriert |
 | `logprep.processor.calculator.fourFn.BNF` | `calculator/processor.py` | Pratt-Parser in Rust (gleicher Funktionsumfang) | in Rust zu schreiben |
+| `hashlib` (SHA256) | `deduplicator`, `pseudonymizer` (`logprep/util/hasher.py`) | `sha2` Crate (Identität zu `hashlib.sha256().hexdigest()` testen) | ✅ hinzufügen |
+| `Crypto.Cipher.AES` (GCM) + `RSA/OAEP` | `pseudonymizer` (`logprep/util/pseudo/`) | `aes-gcm` + `rsa` Crates | ✅ hinzufügen |
+| `datetime`/`zoneinfo`/`time` Parsing | `timestamper`, `timestamp_differ`, `datetime_extractor` | `chrono` Crate | ✅ hinzufügen |
+| `uuid.uuid4` | `pre_detector` | `uuid` Crate (`v4` Feature) | ✅ hinzufügen |
+| Python `ipaddress` | `network_comparison`, `ip_informer`, `domain_label_extractor` | `ipnetwork` Crate bzw. eigene Parser (Semantik-Parität zu CPython testen) | teilweise in Rust zu schreiben |
+| Grok-Pattern-Engine (`re` + Pattern-Zips) | `grokker` | Eigener Grok-Parser in `processor/grokker/grok.rs` über `regex` Crate; Pattern-Inhalt kommt via Python-Getter beim `add_rule` | in Rust zu schreiben |
+| `sklearn`/`joblib` (ML-Inferenz) | `amides` | **keine Migration** — Gruppe D (4i), bleibt Python-Callback; ggf. später ONNX/tract | Ausnahme (dokumentiert) |
+| `requests`/`socket` (Verarbeitungszeit-I/O) | `requester`, `domain_resolver`, `generic_resolver`, `geoip_enricher` | **keine Migration** — Gruppe D (4i), I/O bleibt Python; `geoip2`-Lookup ist Kandidat für `maxminddb` Crate sobald Datei-Handling geklärt ist | Ausnahme (dokumentiert) |
 
 **Verboten in Phase 4**:
 - `pyo3-asyncio`, `pyo3-asyncio`-basierte tokio-Integration (Phase 6)
@@ -538,7 +546,14 @@ class Dropper(Processor):
   - `apply` führt die Aktionen via `field::value::*` aus (Phase 1). Convert-Actions nutzen `str::parse::<i64>()` / `::parse::<f64>()`.
   - 40+ Rust-Unit-Tests.
 
-- **4i — Aufräumen + Legacy-Path-Validierung + Negativkatalog-Check**:
+- **4i — Verbleibende Prozessoren (Welle 2)**: Zusätzlich zu den neun priorisierten Prozessoren werden die restlichen 23 ng-Prozessoren migriert. Sie werden nach ihren externen Abhängigkeiten in vier Gruppen mit identischem Regel-Slot-Mechanismus (4b) abgearbeitet. I/O- und ML-abhängige Prozessoren bleiben **bewusst** im Python-Callback-Pfad; ihre Konvertierungs-/Lookup-Logik wandert erst, wenn ein Rust-Äquivalent ohne Regression verfügbar ist (Sequenz: erst Rule-Logik, dann I/O über `OutputSpec`/Connectors):
+  - **Gruppe A — reine Event-Logik, ohne `OutputSpec` (15)**: `key_checker` (Feld-Existenz-Check), `generic_adder` (statische `add_fields_to`), `field_name_replacer` (`transform_field_value` + Kollisions-Handler aus `helper.py` → `field::value::transform_field_value`), `selective_extractor`, `labeler` (Tag-Merge), `deduplicator` (Hash-Vergleich; `hashlib` → `sha2`/`blake3` Crate), `template_replacer` (`string.Template` → eigener Placeholder-Parser + `regex`), `datetime_extractor`, `timestamper`, `timestamp_differ` (`datetime`/`zoneinfo` → `chrono` Crate), `network_comparison`, `ip_informer` (Python-`ipaddress` → `ipnetwork` Crate bzw. eigene IPv4/IPv6-Parity zu CPython), `domain_label_extractor` (Public-Suffix-Logik 1:1 aus `logprep/util/url` nach Rust), `list_comparison` (Vergleichslogik in Rust; Listen-Inhalte werden beim `add_rule` via `RuleLoader`/Getter aus Python übernommen — Date-I/O bleibt Python, Leitprinzip 8), `grokker` (eigener Grok-Engine in `processor/grokker/grok.rs` über dem `regex` Crate inkl. rekursiver Pattern-Auflösung; Pattern-Dateien kommen via Getter aus Python).
+  - **Gruppe B — Zusatz-Events via `OutputSpec` (2)**: `pre_detector` (inkl. `IPAlerter`; `uuid4` → `uuid` Crate) und `pseudonymizer` (Krypto aus `logprep.util.pseudo`: `Crypto.Cipher.AES` GCM + `RSA/OAEP` → `aes-gcm` + `rsa` Crates, `SHA256Hasher` → `sha2` Crate, URL-Aufspaltung in Rust). Vorher Erweiterung von `ProcessOutcome` um `extra_events: Vec<Value>` (bzw. ein Rust-`PendingOutputs`-Kanal) und eines `OutputSpec`-Pfads im Core, damit RuleSpecs zusätzliche Events emittieren können, ohne die ABC zu umgehen. Metrik-/Outcome-Vertrag bleibt: Python konsumiert `matched_rule_ids` + `extra_events`.
+  - **Gruppe C — große, aber pure Logik (1)**: `clusterer` (Signature-Phases/Distanz-Metriken komplett in Rust; Portierung der Legacy-Tests als Rust-Unit-Tests, da das Regelwerk sehr fehleranfällig ist).
+  - **Gruppe D — bleibt vorerst im Callback-Pfad (5, Ausnahme dokumentieren)**: `requester` (`requests`-HTTP zur Verarbeitungszeit), `domain_resolver` (`socket`-DNS), `generic_resolver` (HTTP-basierter Datei-Cache), `geoip_enricher` (`geoip2`-MMDB — Candidate für `maxminddb` Crate, aber Datei-/filelock-Handling läuft zur Verarbeitungszeit), `amides` (sklearn/joblib-ML-Inferenz ohne tragfähiges Rust-Äquivalent; ggf. später ONNX-basiert). Für diese fünf bleibt `_apply_rules` als Python-Callback aktiv; sie sind die treibende Kraft hinter Phase 5.5 (Rückbau des Roundtrip-Overheads), da ihr Roundtrip-Pfad bis zu einer späteren Phase bestehen bleibt.
+  - Nach jeder Untergruppe: Unit-Tests des jeweiligen Prozessors ohne Änderung grün, Eintrag in `scripts/PHASE4_DONE.txt`, Spec-Factory unter `logprep._rust.processor.<name>_spec` registrieren, Benchmark gegen Phase-3.5-Baseline.
+
+- **4j — Aufräumen + Legacy-Path-Validierung + Negativkatalog-Check**:
   1. `logprep/processor/<name>/processor.py` wird zum **Re-Export** (für nicht-ng-Pfad), der `logprep.ng.processor.<name>.processor` importiert. Damit existiert nur noch **eine** Logik-Quelle (Rust via Core) und der nicht-ng-Pfad ist nur ein dünner Python-Alias. **`logprep/processor/<name>/rule.py` bleibt unverändert** — die `attrs`-`Rule`-Klasse ist die externe Introspection-API und Source der Metriken; sie wird *nicht* re-exportiert oder reduziert.
   2. `logprep.registry.Registry._ng_mapping` und `_non_ng_mapping` zeigen weiterhin auf die jeweiligen `processor.<Name>` — keine Änderung.
   3. `tests/unit/processor/<name>/test_<name>.py` läuft **ohne Änderung** grün — Test-Suite ist die Wahrheit.
@@ -596,6 +611,7 @@ uv run python ./benchmarks/run_phase_benchmark.py \
 ### Akzeptanzkriterien (Phase 4 abgeschlossen)
 
 - [ ] Alle 9 priorisierten Prozessoren (dropper, deleter, field_manager, concatenator, string_splitter, calculator, dissector, replacer, decoder) haben einen `RuleSpec`-Struct in `crates/logprep-core/src/processor/<name>.rs` und sind über den `ProcessorCore`-Slot registriert (kein Python-Callback mehr).
+- [ ] Schritt 4i Welle 2: Alle Prozessoren der Gruppen A–C (18) haben einen `RuleSpec` und sind ohne Python-Callback registriert; die Prozessoren der Gruppe D (requester, domain_resolver, generic_resolver, geoip_enricher, amides) sind als bewusste Callback-Ausnahme in `MIGRATION_PLAN.md` und `scripts/PHASE4_DONE.txt` dokumentiert.
 - [ ] `field::value` (Pure-Rust-Versionen der Phase-1-Helper) ist in `crates/logprep-core/src/field/value.rs` vorhanden; `field::py` ist dünner Wrapper.
 - [ ] **Kein** migriertes `logprep/ng/processor/<name>/processor.py` importiert `pop_dotted_field_value`, `add_fields_to`, `get_dotted_field_value`, `pyparsing`, `msgspec`, `re`, `base64` oder ruft `_rule_tree.get_matching_rules` auf, und definiert kein `_apply_rules` / kein `async def process` (verifiziert via `scripts/check_phase4_adapter_thinness.py`).
 - [ ] **Keine** `for`-Schleife über `event.data`-Keys, `if`-Verzweigungen auf Event-Feldern, oder Event-mutierende Operationen in migrierten Python-Adaptern (nur `load_rules`-Registrierung).
@@ -686,6 +702,21 @@ uv run pytest tests/acceptance/ -vvv
 uv run python ./benchmarks/benchmark_connectors.py --baseline benchmarks/phase4.json \
   --output benchmarks/phase5.json
 ```
+
+---
+
+## Phase 5.5 (Nach Phase 5, parallel zu 4c–4i): Rückbau des Event-Serialisierungs-Overheads
+
+**Ziel**: Die in 4a bewusst in Kauf genommenen `dict → serde_json::Value → dict`-Roundtrips werden schrittweise vollständig abgebaut, bis im ng-Event-Pfad kein Event mehr für Helfer-Aufrufe konvertiert wird.
+
+**Hintergrund**: Der Phase-4-Benchmark (`benchmarks/results/phase4_ng_20260918_150753.txt`, weighted 2.648 docs/s) zeigt **−17,2 % ggü. Phase 3.5**. Ursache: `field::py` delegiert plangetreu auf `field::value`; jeder Helfer-Aufruf aus den Python-`_apply_rules`-Callbacks der noch un-migrierten Prozessoren (und `delete_source_fields` im `ProcessorCore`, je gepopptem Source-Feld ein Full-Rebuild des Live-Dicts) zahlt O(ganzes Event) pro Aufruf. Dieser Overhead ist temporär und sinkt mit jedem migrierten `RuleSpec`, da der Callback-Pfad entfällt.
+
+**Aufgaben**:
+
+- **5.5a — `delete_source_fields` im Core optimieren**: alle Source-Felder einmalig auf dem bereits konvertierten `Value` poppen und erst danach einmal zurück ins PyDict synchronisieren (statt Voll-Roundtrip pro Feld).
+- **5.5b — Callback-Pfad trockengelegt**: mit Abschluss von 4c–4i rufen nur noch die Prozessoren der Gruppe D (requester, domain_resolver, generic_resolver, geoip_enricher, amides) `field::py`-Helfer pro Event auf; Inventur via Negativkatalog-Check (`scripts/check_phase4_adapter_thinness.py`), Liste der verbleibenden Nutzer von `logprep._rust`-Feldhelfern im ng-Pfad.
+- **5.5c — `field::py` auf Legacy-Pfad zurückschneiden**: sobald `ng/` keinen Roundtrip mehr nutzt, verbleiben die PyO3-Helfer nur für den nicht-ng-Legacy-Pfad; dort kann der Live-Dict-Zugriff (ohne Konvertierung) als zweite Implementierung erhalten bleiben, bis der Legacy-Pfad eingestellt wird.
+- **5.5d — Verifizierung**: Phase-Benchmark gegen die 3.5-Baseline (`benchmarks/results/phase3_5_ng_20260731_150656.txt`, 3.200 docs/s weighted); Akzeptanz: ≥ 3.5-Niveau, soweit die Benchmark-Pipeline keine Prozessoren der Gruppe D enthält (deren Roundtrip-Anteil ist als verbleibende Differenz zu dokumentieren), Ergebnis in `benchmarks/BENCHMARK_HISTORY.md` eintragen.
 
 ---
 
@@ -786,11 +817,12 @@ Phase 1 (Setup + Dotted-Field)
             └─> Phase 3.5 (Processor-Orchestrierung / Base-ABC)
                  └─> Phase 4 (Processor-RuleSpecs)
                       └─> Phase 5 (Connectors, ng/)
-                           └─> Phase 6 (Pipeline, ng/)
-                                └─> Phase 7 (Runner + CLI, ng/)
+                           └─> Phase 5.5 (Rückbau Serialisierungs-Overhead, parallel zu 4c–4i)
+                                └─> Phase 6 (Pipeline, ng/)
+                                     └─> Phase 7 (Runner + CLI, ng/)
 ```
 
-Phase 3.5 ist die Voraussetzung für Anforderung 1 (intern nur noch Rust): sie migriert die gemeinsame Orchestrierung *vor* der per-Prozessor-Migration. Phase 4 belegt dann pro Processor den `rule_specs`-Slot des Cores.
+Phase 3.5 ist die Voraussetzung für Anforderung 1 (intern nur noch Rust): sie migriert die gemeinsame Orchestrierung *vor* der per-Prozessor-Migration. Phase 4 belegt dann pro Processor den `rule_specs`-Slot des Cores. Phase 5.5 baut den in 4a bewusst in Kauf genommenen Event-Roundtrip-Overhead wieder ab, sobald die migrierten `RuleSpec`s den Python-Callback-Pfad ersetzen.
 
 Jede Phase baut auf der vorherigen auf. Nach jeder Phase:
 1. Alle Tests grün

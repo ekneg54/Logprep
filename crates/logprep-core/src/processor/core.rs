@@ -15,11 +15,13 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::filter::expression::{FilterExpressionInner, PyFilterExpression, pydict_to_json};
+use crate::filter::expression::{
+    FilterExpressionInner, PyFilterExpression, json_to_pydict, pydict_to_json,
+};
 use crate::rule::PyRuleTree;
 
-use super::RuleSpec;
 use super::outcome::ProcessOutcome;
+use super::{PyRuleSpec, RuleSpec, SpecError, SpecWarning};
 
 /// Gecachte, statische Metadaten einer Python-Rule.
 ///
@@ -121,6 +123,53 @@ impl PyProcessorCore {
         self.tree = Some(tree);
         self.rule_mapping = Some(rule_mapping);
         self.meta_cache.clear();
+    }
+
+    // ─── Phase 4: RuleSpec-Registrierung ──────────────────────────────────
+
+    /// Legt einen pure-Rust `RuleSpec` fuer die angegebene Rule-ID ab.
+    /// Sobald ein Eintrag existiert, dispatcht der Core an `spec.apply()`
+    /// statt an den Python-`apply_hook`.
+    ///
+    /// Der `spec` Parameter ist ein `Py<PyRuleSpec>` — die Rust-Factory-
+    /// Klasse (z.B. `PyDropperSpecFactory`) erzeugt den Wrapper und uebergibt
+    /// ihn; nach dem Aufruf ist das `inner` -- ein `Box<dyn RuleSpec>` --
+    /// aus dem Wrapper entfernt und im Core gespeichert.
+    #[pyo3(signature = (rule_id, spec))]
+    fn set_rule_spec(
+        &mut self,
+        py: Python<'_>,
+        rule_id: u64,
+        spec: Py<PyRuleSpec>,
+    ) -> PyResult<()> {
+        let mut spec_ref = spec.borrow_mut(py);
+        match spec_ref.inner.take() {
+            Some(inner) => {
+                self.rule_specs.insert(rule_id, inner);
+                Ok(())
+            }
+            None => Err(pyo3::exceptions::PyValueError::new_err(
+                "PyRuleSpec already consumed by a previous set_rule_spec call",
+            )),
+        }
+    }
+
+    /// Registriert mehrere RuleSpecs auf einmal — Uebergabe ein Dictionary
+    /// rule_id (int) → PyRuleSpec.
+    #[pyo3(signature = (items,))]
+    fn set_rule_specs_bulk(&mut self, py: Python<'_>, items: &Bound<'_, PyDict>) -> PyResult<()> {
+        for (k, v) in items.iter() {
+            let rule_id = k.extract::<u64>()?;
+            let spec = v.extract::<Py<PyRuleSpec>>()?;
+            self.set_rule_spec(py, rule_id, spec)?;
+        }
+        Ok(())
+    }
+
+    /// Entfernt einen zuvor registrierten RuleSpec. Wird z.B. beim Neuladen
+    /// von Rules benoetigt (remove_rule im RuleTree).
+    fn unregister_spec(&mut self, rule_id: u64) {
+        self.rule_specs.remove(&rule_id);
     }
 
     /// Verarbeitet ein Event: Matcht Rules, wendet sie an (Callback oder
@@ -239,11 +288,9 @@ impl PyProcessorCore {
             return Ok(());
         }
 
-        // Dispatch: Phase-4-RuleSpec-Slot (derzeit leer) oder Python-Callback.
-        let apply_result = if self.rule_specs.contains_key(&rule_id) {
-            // Phase 4: spec.apply(&mut value) — in Phase 3.5 unerreichbar,
-            // da keine RuleSpecs registriert werden.
-            Ok(())
+        // Dispatch: Phase-4-RuleSpec-Slot oder Python-Callback.
+        let apply_result: PyResult<()> = if self.rule_specs.contains_key(&rule_id) {
+            self.apply_spec(py, event, rule_id, rule_obj.bind(py), outcome)
         } else if let Some(hook) = apply_hook {
             hook.call1(py, (rule_id, event)).map(|_| ())
         } else {
@@ -266,6 +313,67 @@ impl PyProcessorCore {
             }
         }
         Ok(())
+    }
+
+    /// Phase-4-Pfad: wendet einen registrierten `RuleSpec` an, synchronisiert
+    /// das `serde_json::Value` zurueck ins Event-PyDict und wertet die
+    /// `SpecWarning`s (via `handle_warning_error`). Fatal-Spec-Fehler
+    /// (`SpecError::Critical`) werden als `ProcessingCriticalError`-PyErr
+    /// zurueckgegeben und landen ueber `classify_error` in `outcome.errors`.
+    fn apply_spec(
+        &self,
+        py: Python<'_>,
+        event: &Bound<'_, PyDict>,
+        rule_id: u64,
+        rule_obj: &Bound<'_, PyAny>,
+        outcome: &mut ProcessOutcome,
+    ) -> PyResult<()> {
+        let spec = self.rule_specs.get(&rule_id).unwrap();
+        let mut value = pydict_to_json(event.as_any())?;
+        let mut warnings = Vec::new();
+        let result = spec.apply(&mut value, &mut warnings);
+        // Ruecksynchronisation VOR dem Warning-Handling, damit
+        // `handle_warning_error` den aktuellen Event-Zustand sieht.
+        json_to_pydict(event, &value)?;
+        for warning in warnings {
+            let exc = Self::spec_warning_to_pyexc(py, warning, rule_obj, event)?;
+            let exc_bound = exc.bind(py);
+            Self::handle_warning_error(py, event, rule_obj, exc_bound, outcome)?;
+        }
+        result.map_err(|err| Self::spec_error_to_pyerr(py, err, rule_obj))
+    }
+
+    /// Konvertiert eine `SpecWarning` in die entsprechende Python-Exception.
+    fn spec_warning_to_pyexc(
+        py: Python<'_>,
+        warning: SpecWarning,
+        rule_obj: &Bound<'_, PyAny>,
+        event: &Bound<'_, PyDict>,
+    ) -> PyResult<PyObject> {
+        let exceptions = py.import("logprep.processor.base.exceptions")?;
+        let obj = match warning {
+            SpecWarning::Warning { message } => exceptions
+                .getattr("ProcessingWarning")?
+                .call1((message, rule_obj, event))?,
+            SpecWarning::FieldExists { skipped_fields } => exceptions
+                .getattr("FieldExistsWarning")?
+                .call1((rule_obj, event, skipped_fields))?,
+        };
+        Ok(obj.unbind())
+    }
+
+    /// Konvertiert einen `SpecError` in eine Python-`ProcessingCriticalError`.
+    fn spec_error_to_pyerr(py: Python<'_>, error: SpecError, rule_obj: &Bound<'_, PyAny>) -> PyErr {
+        let result = (|| -> PyResult<PyErr> {
+            let exceptions = py.import("logprep.processor.base.exceptions")?;
+            let critical_cls = exceptions.getattr("ProcessingCriticalError")?;
+            let message = match error {
+                SpecError::Critical { message } => message,
+            };
+            let exc = critical_cls.call1((message, rule_obj))?;
+            Ok(PyErr::from_value(exc))
+        })();
+        result.unwrap_or_else(|err| err)
     }
 
     /// Klassifiziert eine aus dem Callback geflohene Exception —
@@ -606,7 +714,12 @@ mod tests {
             )
             .unwrap();
             core.process(py, &event, Some(hook)).unwrap();
-            let seen: u64 = event.get_item("seen_id").unwrap().unwrap().extract().unwrap();
+            let seen: u64 = event
+                .get_item("seen_id")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
             assert_eq!(seen, 42);
         });
     }
@@ -766,8 +879,8 @@ mod tests {
             let mut core = new_core(false, false);
             let rule_type = make_rule_class(py).unwrap();
             let rule = make_rule(py, &rule_type).unwrap();
-            let data_error = pyo3::exceptions::PyRuntimeError::new_err("getter failed")
-                .into_value(py);
+            let data_error =
+                pyo3::exceptions::PyRuntimeError::new_err("getter failed").into_value(py);
             rule.bind(py).setattr("data_error", data_error).unwrap();
             setup_core_with_rule(py, &mut core, 1, string_expr("f", "v"), &rule).unwrap();
             let event = event_dict(py, &[("f", "v")]).unwrap();
@@ -1227,10 +1340,13 @@ mod tests {
             assert!(set.contains("42"));
             // Liste mit Nicht-Strings: nur String-Elemente
             event
-                .set_item("tags", vec![
-                    "x".into_pyobject(py).unwrap().into_any().unbind(),
-                    7u64.into_pyobject(py).unwrap().into_any().unbind(),
-                ])
+                .set_item(
+                    "tags",
+                    vec![
+                        "x".into_pyobject(py).unwrap().into_any().unbind(),
+                        7u64.into_pyobject(py).unwrap().into_any().unbind(),
+                    ],
+                )
                 .unwrap();
             let set = current_tag_set(&event).unwrap();
             assert!(set.contains("x") && !set.contains("7"));
@@ -1262,5 +1378,244 @@ mod tests {
         assert!(outcome.matched_rule_ids.is_empty());
         assert!(outcome.warnings.is_empty());
         assert!(outcome.errors.is_empty());
+    }
+
+    // ─── Phase 4b: RuleSpec-Dispatch ───────────────────────────────────────
+
+    /// Minimale Test-Spec, die ein Feld setzt und optional eine Warning bzw.
+    /// einen Critical-Fehler erzeugt.
+    struct MockSpec {
+        warning_message: Option<&'static str>,
+        skipped_fields: Option<Vec<&'static str>>,
+        critical: bool,
+    }
+
+    impl RuleSpec for MockSpec {
+        fn type_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn apply(
+            &self,
+            event: &mut serde_json::Value,
+            warnings: &mut Vec<SpecWarning>,
+        ) -> Result<(), SpecError> {
+            if let Some(message) = self.warning_message {
+                warnings.push(SpecWarning::Warning {
+                    message: message.to_string(),
+                });
+            }
+            if let Some(fields) = &self.skipped_fields {
+                warnings.push(SpecWarning::FieldExists {
+                    skipped_fields: fields.iter().map(|s| s.to_string()).collect(),
+                });
+            }
+            if self.critical {
+                return Err(SpecError::Critical {
+                    message: "mock critical".to_string(),
+                });
+            }
+            event.as_object_mut().unwrap().insert(
+                "from_spec".to_string(),
+                serde_json::Value::String("yes".to_string()),
+            );
+            Ok(())
+        }
+    }
+
+    fn register_spec(core: &mut PyProcessorCore, py: Python<'_>, rule_id: u64, spec: MockSpec) {
+        let wrapper = Py::new(py, PyRuleSpec::new(Box::new(spec))).unwrap();
+        core.set_rule_spec(py, rule_id, wrapper).unwrap();
+    }
+
+    #[test]
+    fn test_spec_applies_and_syncs_event() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let rule_type = make_rule_class(py).unwrap();
+            let rule = make_rule(py, &rule_type).unwrap();
+            setup_core_with_rule(py, &mut core, 7, string_expr("f", "v"), &rule).unwrap();
+            register_spec(
+                &mut core,
+                py,
+                7,
+                MockSpec {
+                    warning_message: None,
+                    skipped_fields: None,
+                    critical: false,
+                },
+            );
+            let event = event_dict(py, &[("f", "v")]).unwrap();
+            let outcome = core
+                .process(py, &event, Some(noop_hook(py).unwrap()))
+                .unwrap();
+            assert_eq!(outcome.matched_rule_ids, vec![7]);
+            assert!(outcome.warnings.is_empty());
+            assert!(outcome.errors.is_empty());
+            let from_spec: String = event
+                .get_item("from_spec")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(from_spec, "yes");
+        });
+    }
+
+    #[test]
+    fn test_spec_warning_becomes_processing_warning_and_merges_tags() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let rule_type = make_rule_class(py).unwrap();
+            let rule = make_rule(py, &rule_type).unwrap();
+            setup_core_with_rule(py, &mut core, 7, string_expr("f", "v"), &rule).unwrap();
+            register_spec(
+                &mut core,
+                py,
+                7,
+                MockSpec {
+                    warning_message: Some("spec says hi"),
+                    skipped_fields: None,
+                    critical: false,
+                },
+            );
+            let event = event_dict(py, &[("f", "v")]).unwrap();
+            let outcome = core
+                .process(py, &event, Some(noop_hook(py).unwrap()))
+                .unwrap();
+            assert_eq!(outcome.warnings.len(), 1);
+            assert!(outcome.errors.is_empty());
+            // failure_tags der Fake-Rule werden gemergt
+            let tags: Vec<String> = event.get_item("tags").unwrap().unwrap().extract().unwrap();
+            assert_eq!(tags, vec!["_fake_failure".to_string()]);
+        });
+    }
+
+    #[test]
+    fn test_spec_field_exists_warning_maps_to_field_exists_warning() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let rule_type = make_rule_class(py).unwrap();
+            let rule = make_rule(py, &rule_type).unwrap();
+            setup_core_with_rule(py, &mut core, 7, string_expr("f", "v"), &rule).unwrap();
+            register_spec(
+                &mut core,
+                py,
+                7,
+                MockSpec {
+                    warning_message: None,
+                    skipped_fields: Some(vec!["a", "b"]),
+                    critical: false,
+                },
+            );
+            let event = event_dict(py, &[("f", "v")]).unwrap();
+            let outcome = core
+                .process(py, &event, Some(noop_hook(py).unwrap()))
+                .unwrap();
+            assert_eq!(outcome.warnings.len(), 1);
+            // Die Exception-Klasse ist eine `logprep.processor.base.exceptions.FieldExistsWarning`
+            let exceptions = py.import("logprep.processor.base.exceptions").unwrap();
+            let field_exists_cls = exceptions.getattr("FieldExistsWarning").unwrap();
+            assert!(
+                outcome.warnings[0]
+                    .bind(py)
+                    .is_instance(&field_exists_cls)
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn test_spec_critical_error_lands_in_outcome_errors() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let rule_type = make_rule_class(py).unwrap();
+            let rule = make_rule(py, &rule_type).unwrap();
+            setup_core_with_rule(py, &mut core, 7, string_expr("f", "v"), &rule).unwrap();
+            register_spec(
+                &mut core,
+                py,
+                7,
+                MockSpec {
+                    warning_message: None,
+                    skipped_fields: None,
+                    critical: true,
+                },
+            );
+            let event = event_dict(py, &[("f", "v")]).unwrap();
+            let outcome = core
+                .process(py, &event, Some(noop_hook(py).unwrap()))
+                .unwrap();
+            assert!(outcome.warnings.is_empty());
+            assert_eq!(outcome.errors.len(), 1);
+            let exceptions = py.import("logprep.processor.base.exceptions").unwrap();
+            let critical_cls = exceptions.getattr("ProcessingCriticalError").unwrap();
+            assert!(
+                outcome.errors[0]
+                    .bind(py)
+                    .is_instance(&critical_cls)
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn test_spec_registration_consumes_wrapper_and_rejects_reuse() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let wrapper = Py::new(
+                py,
+                PyRuleSpec::new(Box::new(MockSpec {
+                    warning_message: None,
+                    skipped_fields: None,
+                    critical: false,
+                })),
+            )
+            .unwrap();
+            core.set_rule_spec(py, 1, wrapper.clone_ref(py)).unwrap();
+            // Derselbe Wrapper ist konsumiert → ValueError.
+            let err = core.set_rule_spec(py, 1, wrapper).unwrap_err();
+            assert!(err.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+            core.unregister_spec(1);
+            // Nach dem Unregister-Slot ist eine frische Registrierung moeglich.
+            let fresh = Py::new(
+                py,
+                PyRuleSpec::new(Box::new(MockSpec {
+                    warning_message: None,
+                    skipped_fields: None,
+                    critical: false,
+                })),
+            )
+            .unwrap();
+            core.set_rule_spec(py, 1, fresh).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_set_rule_specs_bulk() {
+        py_ready();
+        Python::with_gil(|py| {
+            let mut core = new_core(false, false);
+            let items = PyDict::new(py);
+            for id in [5_u64, 6, 9] {
+                let wrapper = Py::new(
+                    py,
+                    PyRuleSpec::new(Box::new(MockSpec {
+                        warning_message: None,
+                        skipped_fields: None,
+                        critical: false,
+                    })),
+                )
+                .unwrap();
+                items.set_item(id, wrapper).unwrap();
+            }
+            core.set_rule_specs_bulk(py, &items).unwrap();
+            assert_eq!(core.rule_specs.len(), 3);
+        });
     }
 }

@@ -31,7 +31,7 @@ impl RuleSorterInner {
 
         let dotted = match expr {
             FilterExpressionInner::Not { child } => {
-                return Self::sorting_key(child, priority_dict, cache)
+                return Self::sorting_key(child, priority_dict, cache);
             }
             FilterExpressionInner::String { key, .. }
             | FilterExpressionInner::Wildcard { key, .. }
@@ -97,6 +97,9 @@ mod tests {
             }],
         ];
         RuleSorterInner::sort_segments(&mut segments, &HashMap::new());
-        assert!(matches!(segments[0][0], FilterExpressionInner::Always { .. }));
+        assert!(matches!(
+            segments[0][0],
+            FilterExpressionInner::Always { .. }
+        ));
     }
 }

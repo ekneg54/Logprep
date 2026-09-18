@@ -5,8 +5,8 @@ use pyo3::types::PyDict;
 use regex::Regex;
 
 use super::expression::{
-    build_sigma_regex, build_wildcard_regex, normalize_regex, FilterExpressionInner,
-    NumericBound, PyFilterExpression,
+    FilterExpressionInner, NumericBound, PyFilterExpression, build_sigma_regex,
+    build_wildcard_regex, normalize_regex,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,23 +176,23 @@ enum Token {
     Re,
     StringLit(String),
     RegexLit(String),
-    Word { value: String, raw: String },
+    Word {
+        value: String,
+        raw: String,
+    },
     Eof,
 }
 
 fn is_word_char(c: char) -> bool {
-    !c.is_ascii_whitespace()
-        && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '|')
+    !c.is_ascii_whitespace() && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '|')
 }
 
 fn is_word_escape(c: char) -> bool {
-    c.is_ascii_whitespace()
-        || matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\\')
+    c.is_ascii_whitespace() || matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\\')
 }
 
 fn is_word_start(c: char) -> bool {
-    !c.is_ascii_whitespace()
-        && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '"')
+    !c.is_ascii_whitespace() && !matches!(c, ':' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '"')
 }
 
 struct Lexer {
@@ -262,14 +262,12 @@ impl Lexer {
                         None => {
                             return Err(LuceneParseError(
                                 "Unterminated escape in quoted string".to_string(),
-                            ))
+                            ));
                         }
                     }
                 }
                 Some(c) => value.push(c),
-                None => {
-                    return Err(LuceneParseError("Unterminated quoted string".to_string()))
-                }
+                None => return Err(LuceneParseError("Unterminated quoted string".to_string())),
             }
         }
     }
@@ -286,9 +284,7 @@ impl Lexer {
                     }
                 }
                 Some(c) => value.push(c),
-                None => {
-                    return Err(LuceneParseError("Unterminated regex pattern".to_string()))
-                }
+                None => return Err(LuceneParseError("Unterminated regex pattern".to_string())),
             }
         }
     }
@@ -582,9 +578,7 @@ impl Parser {
                 self.field_group_key = saved;
                 Ok(expr)
             }
-            Token::Eof => Err(LuceneParseError(
-                "unexpected end of expression".to_string(),
-            )),
+            Token::Eof => Err(LuceneParseError("unexpected end of expression".to_string())),
             _ => Err(LuceneParseError(format!(
                 "Unexpected token: {:?}",
                 self.peek()
@@ -627,8 +621,7 @@ impl Parser {
                 Ok(self.create_string_expr(key, expected, expected, false))
             }
             FilterExpressionInner::Wildcard { expected, .. } => {
-                let regex =
-                    build_wildcard_regex(expected).map_err(|e| LuceneParseError(e))?;
+                let regex = build_wildcard_regex(expected).map_err(|e| LuceneParseError(e))?;
                 Ok(FilterExpressionInner::Wildcard {
                     key: key.to_vec(),
                     expected: expected.clone(),
@@ -636,8 +629,7 @@ impl Parser {
                 })
             }
             FilterExpressionInner::Sigma { expected, .. } => {
-                let regex =
-                    build_sigma_regex(expected).map_err(|e| LuceneParseError(e))?;
+                let regex = build_sigma_regex(expected).map_err(|e| LuceneParseError(e))?;
                 Ok(FilterExpressionInner::Sigma {
                     key: key.to_vec(),
                     expected: expected.clone(),
@@ -653,9 +645,9 @@ impl Parser {
                     pattern: compiled,
                 })
             }
-            FilterExpressionInner::Null { .. } => Ok(FilterExpressionInner::Null {
-                key: key.to_vec(),
-            }),
+            FilterExpressionInner::Null { .. } => {
+                Ok(FilterExpressionInner::Null { key: key.to_vec() })
+            }
             FilterExpressionInner::Not { child } => {
                 let filled = self.fill_leaf_keys(child, key)?;
                 Ok(FilterExpressionInner::Not {
@@ -684,9 +676,7 @@ impl Parser {
         }
     }
 
-    fn parse_search_field_or_value(
-        &mut self,
-    ) -> Result<FilterExpressionInner, LuceneParseError> {
+    fn parse_search_field_or_value(&mut self) -> Result<FilterExpressionInner, LuceneParseError> {
         let tok = self.peek().clone();
 
         match &tok {
@@ -871,9 +861,7 @@ impl Parser {
                 let value = value.clone();
                 let raw = raw.clone();
                 self.advance();
-                if matches!(self.peek(), Token::LBracket)
-                    || matches!(self.peek(), Token::LBrace)
-                {
+                if matches!(self.peek(), Token::LBracket) || matches!(self.peek(), Token::LBrace) {
                     return self.parse_range(key, &value);
                 }
                 if value == "null" {
@@ -897,9 +885,7 @@ impl Parser {
                         }
                         Ok(self.create_string_expr(key, &negated, &negated_raw, false))
                     }
-                    _ => Err(LuceneParseError(
-                        "Expected value after '-'".to_string(),
-                    )),
+                    _ => Err(LuceneParseError("Expected value after '-'".to_string())),
                 }
             }
             Token::Star => {
@@ -907,9 +893,7 @@ impl Parser {
                 Ok(FilterExpressionInner::Always { value: true })
             }
             Token::LBracket | Token::LBrace => self.parse_range(key, ""),
-            Token::Eof => Err(LuceneParseError(
-                "unexpected end of expression".to_string(),
-            )),
+            Token::Eof => Err(LuceneParseError("unexpected end of expression".to_string())),
             _ => Err(LuceneParseError(format!(
                 "Unexpected value token: {:?}",
                 val_tok
@@ -1039,9 +1023,7 @@ impl Parser {
             }
         }
         if !is_quoted && value == "null" {
-            return FilterExpressionInner::Null {
-                key: key.to_vec(),
-            };
+            return FilterExpressionInner::Null { key: key.to_vec() };
         }
         if !is_quoted && (value.contains('*') || value.contains('?')) {
             if let Ok(regex) = build_wildcard_regex(value) {
@@ -1191,7 +1173,7 @@ impl Parser {
                     _ => {
                         return Err(LuceneParseError(
                             "Expected value after '-' in range".to_string(),
-                        ))
+                        ));
                     }
                 }
             }
@@ -1199,7 +1181,7 @@ impl Parser {
                 return Err(LuceneParseError(format!(
                     "Invalid range boundary: {:?}",
                     self.peek()
-                )))
+                )));
             }
         };
 
@@ -1218,7 +1200,7 @@ impl Parser {
                 _ => {
                     return Err(LuceneParseError(
                         "Invalid range boundary after ':'".to_string(),
-                    ))
+                    ));
                 }
             }
         }

@@ -21,6 +21,8 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 2 | `f69ca1a0` (HEAD) | 3,355.57 | 3,336.72 | 3,355.57 | 3,336.63 | 3,393.36 | 32.73 | 302,002 | -4.61% |
 | 3 | `ac604977` | 2,167.97 | 2,167.80 | 2,167.97 | 2,167.76 | 2,168.36 | 0.34 | 195,118 | -38.37% |
 | 3a | `ee5682a0` | 3,462.84 | 3,500.56 | 3,462.84 | 3,385.59 | 3,502.36 | 66.90 | 311,656 | -1.56% |
+| 3.5 | `ef36e3e7` | 3,199.97 | 3,196.96 | 3,199.97 | 3,169.59 | 3,233.36 | 31.99 | 287,998 | -9.04% |
+| 4 (4a/4b, working tree) | `e613e0a5`+ | 2,648.07 | 2,666.83 | 2,648.08 | 2,608.94 | 2,668.46 | 33.90 | 238,328 | -24.7% |
 
 ## Detailed Per-Run Results
 
@@ -64,12 +66,30 @@ This file tracks throughput benchmarks across migration phases to detect regress
 | 2 | 30.0 | 400,000 | 101,568 | 3,385.59 |
 | 3 | 30.0 | 400,000 | 105,071 | 3,502.36 |
 
+### Phase 3.5 — Rust `ProcessorCore` orchestration (`ef36e3e7`)
+
+| Run | Window (s) | Generated | Processed | Throughput (docs/s) |
+|-----|------------|-----------|-----------|---------------------|
+| 1 | 30.0 | 400,000 | 95,909 | 3,196.96 |
+| 2 | 30.0 | 400,000 | 97,001 | 3,233.36 |
+| 3 | 30.0 | 400,000 | 95,088 | 3,169.59 |
+
+### Phase 4 (4a/4b, uncommitted working tree on `e613e0a5`) — pure-Rust `field::value` + thin `field::py` wrappers + `RuleSpec` dispatch
+
+| Run | Window (s) | Generated | Processed | Throughput (docs/s) |
+|-----|------------|-----------|-----------|---------------------|
+| 1 | 30.0 | 400,000 | 80,054 | 2,668.46 |
+| 2 | 30.0 | 400,000 | 80,005 | 2,666.83 |
+| 3 | 30.0 | 400,000 | 78,269 | 2,608.94 |
+
 ## Assessment
 
 **PHASE 1 shows a -4.93% throughput regression** compared to the PHASE 0 baseline.
 **PHASE 2 shows a -4.61% throughput regression** compared to the PHASE 0 baseline, but is **+0.33% above Phase 1**.
 **PHASE 3 shows a -38.37% throughput regression** — the Rust rule tree introduced a major performance bug in `get_json_value` that cloned the entire value on every `matches()` call, plus lost cross-type matching (string/number/bool).
 **PHASE 3a recovers to -1.56%** — fixing the `get_json_value` clone (return `&Value` instead of `Value`) and restoring cross-type matching brings throughput from ~2,168 back to ~3,463 docs/s, within 1.6% of the Phase 0 baseline.
+**PHASE 3.5 settles at -9.04% vs. Phase 0** (the callback roundtrip for un-migrated processors plus core setup overhead was the accepted temporary cost of moving orchestration into `PyProcessorCore`).
+**PHASE 4a/4b shows a severe -17.2% regression vs. Phase 3.5 (down to 2,648 docs/s)** — making `field::py` thin 1–3-line wrappers over `field::value` (per the Phase-4a plan) means every helper call from the still-Python `_apply_rules` callbacks (`get_dotted_field_value`, `add_fields_to`, `pop_dotted_field_value`, …) now converts the whole event `dict → serde_json::Value → dict` and rebuilds the live event dict. With ~50 µs added per event this dominates the cost budget of the un-migrated processors in the benchmark pipeline. The `delete_source_fields` cleanup in the core is affected the same way (full rebuild per popped source field). This violates the "no performance regression" Leitprinzip and should be reverted to the live-object `field::py` implementations (keeping `field::value` as the sole basis for migrated `RuleSpec`s), with py.rs only shrinking as processors migrate in 4c–4h.
 
 ### Key observations
 

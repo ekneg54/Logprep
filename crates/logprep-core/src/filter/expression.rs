@@ -1,6 +1,6 @@
+use fancy_regex::Regex as FilterRegex;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use fancy_regex::Regex as FilterRegex;
 use regex::Regex as StdRegex;
 use serde_json::{Map, Value};
 
@@ -409,9 +409,10 @@ impl FilterExpressionInner {
                 let value = get_json_value(key, document)?;
                 match value {
                     Value::String(s) => Ok(regex.is_match(s).unwrap_or(false)),
-                    Value::Array(arr) => Ok(arr
-                        .iter()
-                        .any(|v| v.as_str().map_or(false, |s| regex.is_match(s).unwrap_or(false)))),
+                    Value::Array(arr) => Ok(arr.iter().any(|v| {
+                        v.as_str()
+                            .map_or(false, |s| regex.is_match(s).unwrap_or(false))
+                    })),
                     _ => Ok(false),
                 }
             }
@@ -588,9 +589,10 @@ impl FilterExpressionInner {
                 let value = get_json_value(key, document)?;
                 match value {
                     Value::String(s) => Ok(pattern.is_match(s).unwrap_or(false)),
-                    Value::Array(arr) => Ok(arr
-                        .iter()
-                        .any(|v| v.as_str().map_or(false, |s| pattern.is_match(s).unwrap_or(false)))),
+                    Value::Array(arr) => Ok(arr.iter().any(|v| {
+                        v.as_str()
+                            .map_or(false, |s| pattern.is_match(s).unwrap_or(false))
+                    })),
                     _ => Ok(false),
                 }
             }
@@ -644,30 +646,26 @@ impl FilterExpressionInner {
                 upper,
                 incl_low,
                 incl_high,
-            } => {
-                range_repr(
-                    key,
-                    &lower.to_string(),
-                    &upper.to_string(),
-                    *incl_low,
-                    *incl_high,
-                )
-            }
+            } => range_repr(
+                key,
+                &lower.to_string(),
+                &upper.to_string(),
+                *incl_low,
+                *incl_high,
+            ),
             Self::FloatRange {
                 key,
                 lower,
                 upper,
                 incl_low,
                 incl_high,
-            } => {
-                range_repr(
-                    key,
-                    &format_float(*lower),
-                    &format_float(*upper),
-                    *incl_low,
-                    *incl_high,
-                )
-            }
+            } => range_repr(
+                key,
+                &format_float(*lower),
+                &format_float(*upper),
+                *incl_low,
+                *incl_high,
+            ),
             Self::NumericRange {
                 key,
                 lower,
@@ -675,12 +673,8 @@ impl FilterExpressionInner {
                 incl_low,
                 incl_high,
             } => {
-                let lo = lower
-                    .as_ref()
-                    .map_or("*".to_string(), |b| b.to_repr());
-                let hi = upper
-                    .as_ref()
-                    .map_or("*".to_string(), |b| b.to_repr());
+                let lo = lower.as_ref().map_or("*".to_string(), |b| b.to_repr());
+                let hi = upper.as_ref().map_or("*".to_string(), |b| b.to_repr());
                 range_repr(key, &lo, &hi, *incl_low, *incl_high)
             }
             Self::StringRange {
@@ -768,24 +762,21 @@ impl FilterExpressionInner {
             "IntegerFilterExpression" => {
                 let key: Vec<String> = obj.getattr("key")?.extract()?;
                 let expected: String = obj.getattr("expected_value")?.extract()?;
-                let val: i64 = expected
-                    .parse()
-                    .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid integer: {}", expected)))?;
-                Ok(FilterExpressionInner::Integer {
-                    key,
-                    expected: val,
-                })
+                let val: i64 = expected.parse().map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "Invalid integer: {}",
+                        expected
+                    ))
+                })?;
+                Ok(FilterExpressionInner::Integer { key, expected: val })
             }
             "FloatFilterExpression" => {
                 let key: Vec<String> = obj.getattr("key")?.extract()?;
                 let expected: String = obj.getattr("expected_value")?.extract()?;
-                let val: f64 = expected
-                    .parse()
-                    .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("Invalid float: {}", expected)))?;
-                Ok(FilterExpressionInner::Float {
-                    key,
-                    expected: val,
-                })
+                let val: f64 = expected.parse().map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(format!("Invalid float: {}", expected))
+                })?;
+                Ok(FilterExpressionInner::Float { key, expected: val })
             }
             "IntegerRangeFilterExpression" => {
                 let key: Vec<String> = obj.getattr("key")?.extract()?;
@@ -1232,9 +1223,7 @@ impl PyFilterExpression {
     fn escaped_expected(&self) -> PyResult<String> {
         match &self.inner {
             FilterExpressionInner::Wildcard { expected, .. }
-            | FilterExpressionInner::Sigma { expected, .. } => {
-                Ok(wildcard_pattern(expected))
-            }
+            | FilterExpressionInner::Sigma { expected, .. } => Ok(wildcard_pattern(expected)),
             _ => Err(pyo3::exceptions::PyAttributeError::new_err(
                 "expression has no 'escaped_expected'",
             )),
@@ -1280,7 +1269,7 @@ pub fn pydict_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 }
 
-fn pyany_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+pub fn pyany_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(dict) = obj.downcast::<PyDict>() {
         let mut map = Map::new();
         for (key, value) in dict.iter() {
@@ -1313,6 +1302,62 @@ fn pyany_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::String(s))
     } else {
         Ok(Value::String(obj.to_string()))
+    }
+}
+
+// ─── serde_json::Value → Python-Objekt Konverter (Phase 4) ───
+
+/// Rekursive Konvertierung eines `serde_json::Value` in ein Python-Objekt.
+pub fn json_to_pyany(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+    Ok(match value {
+        Value::Null => py.None(),
+        Value::Bool(b) => (*b).into_pyobject(py)?.to_owned().into_any().unbind(),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py)?.into_any().unbind()
+            } else if let Some(u) = n.as_u64() {
+                u.into_pyobject(py)?.into_any().unbind()
+            } else {
+                n.as_f64()
+                    .unwrap_or(0.0)
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind()
+            }
+        }
+        Value::String(s) => s.as_str().into_pyobject(py)?.into_any().unbind(),
+        Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                list.append(json_to_pyany(py, item)?)?;
+            }
+            list.into_any().unbind()
+        }
+        Value::Object(map) => {
+            let dict = PyDict::new(py);
+            for (k, v) in map {
+                dict.set_item(k.as_str(), json_to_pyany(py, v)?)?;
+            }
+            dict.into_any().unbind()
+        }
+    })
+}
+
+/// Schreibt ein `serde_json::Object` in ein bestehendes (lebendes) PyDict,
+/// das Python weiterhin referenziert. Nicht-Objekt-Werte sind unzulaessig,
+/// da das Event-Dict nie durch ein Skalar ersetzt wird.
+pub fn json_to_pydict(dict: &Bound<'_, PyDict>, value: &Value) -> PyResult<()> {
+    match value {
+        Value::Object(map) => {
+            dict.clear();
+            for (k, v) in map {
+                dict.set_item(k.as_str(), json_to_pyany(dict.py(), v)?)?;
+            }
+            Ok(())
+        }
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "event must remain an object, got {other}"
+        ))),
     }
 }
 
@@ -1362,7 +1407,7 @@ fn children_from_inner<'py>(
         _ => {
             return Err(pyo3::exceptions::PyAttributeError::new_err(
                 "expression has no 'children'",
-            ))
+            ));
         }
     };
     children
@@ -1654,10 +1699,8 @@ pub fn filter_expression_regex(
     regex_pattern: String,
 ) -> PyResult<PyFilterExpression> {
     let normalized = normalize_regex(&regex_pattern);
-    let compiled =
-        FilterRegex::new(&normalized).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e))
-        })?;
+    let compiled = FilterRegex::new(&normalized)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid regex: {}", e)))?;
     Ok(PyFilterExpression {
         inner: FilterExpressionInner::Regex {
             key,
