@@ -1,9 +1,11 @@
 import collections
+import re
 from collections import defaultdict
 from types import SimpleNamespace
-import re
 
-from logprep.processor.clusterer.signature_calculation.rules.rule_template import SignatureRule
+from logprep.processor.clusterer.signature_calculation.rules.rule_template import (
+    SignatureRule,
+)
 from logprep.processor.clusterer.signature_calculation.signature_phase import LogRecord
 
 

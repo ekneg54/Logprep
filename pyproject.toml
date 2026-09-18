@@ -1,12 +1,12 @@
 [build-system]
-requires = [
-  "uv_build>=0.11.6,<0.12"
-]
-build-backend = "uv_build"
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
 
-[tool.uv.build-backend]
-module-name = "logprep"
-module-root = ""
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "."
+module-name = "logprep._rust"
+manifest-path = "crates/logprep-core/Cargo.toml"
 
 [project]
 name = "logprep"
@@ -135,6 +135,7 @@ extend-exclude = '''
 
 [tool.isort]
 profile = "black"
+line_length = 100
 
 [tool.cibuildwheel]
 build = "cp311-* cp312-* cp313-* cp314-*"
@@ -169,6 +170,10 @@ follow_imports = "silent"
 exclude = "tests/.*"
 
 # Evidently looking at dev Packages, they are installed, mypy doesnt seem to think so
+[[tool.mypy.overrides]]
+module = ["logprep._rust.*"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["requests.*"]
 ignore_missing_imports = true

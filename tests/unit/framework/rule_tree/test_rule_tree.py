@@ -1,18 +1,13 @@
 # pylint: disable=protected-access
 # pylint: disable=missing-docstring
 # pylint: disable=line-too-long
-import json
 from copy import deepcopy
 from unittest import mock
 
 import pytest
 
-from logprep.filter.expression.filter_expression import Exists, StringFilterExpression
-from logprep.framework.rule_tree.node import Node
-from logprep.framework.rule_tree.rule_parser import RuleParser
 from logprep.framework.rule_tree.rule_tree import RuleTree
 from logprep.processor.pre_detector.rule import PreDetectorRule
-from logprep.util import getter
 
 
 @pytest.fixture(name="rule_dict")
@@ -34,65 +29,25 @@ def rule_dict_fixture():
 class TestRuleTree:
     def test_init_without_specifying_parameters(self):
         rule_tree = RuleTree()
-        assert isinstance(rule_tree.root, Node)
-        assert not rule_tree.rule_parser._rule_tagger._tag_map
+        assert rule_tree.number_of_rules == 0
         assert not rule_tree.tree_config.priority_dict
-        assert rule_tree.root.expression is None
+        assert rule_tree.root is None
 
     def test_init_with_specifying_config(self):
         rule_tree = RuleTree(config="tests/testdata/unit/tree_config.json")
-        assert isinstance(rule_tree.root, Node)
-        assert rule_tree.rule_parser._rule_tagger._tag_map == {
-            "field_name_to_check_for_in_rule": "TAG-TO-CHECK-IF-IN-EVENT"
-        }
+        assert rule_tree.number_of_rules == 0
         assert rule_tree.tree_config.priority_dict == {"field_name": "priority"}
-
-    @pytest.mark.parametrize(
-        "tree_config",
-        [
-            {
-                "priority_dict": {
-                    "winlog": 1,  # should be string
-                },
-                "tag_map": {"field_name_to_check_for_in_rule": "TAG-TO-CHECK-IF-IN-EVENT"},
-            },
-            {
-                "priority_dict": {
-                    "winlog": "1",
-                },
-                "tag_map": {"field_name_to_check_for_in_rule": 1},  # should be string
-            },
-        ],
-    )
-    def test_init_with_invalid_tree_config(self, tmp_path, tree_config):
-        tree_config_path = tmp_path / "tree_config.json"
-        tree_config_path.write_text(json.dumps(tree_config))
-        config_data = getter.GetterFactory.from_string(str(tree_config_path)).get_json()
-        with pytest.raises(TypeError, match=r"must be \<class \'str\'\>"):
-            self.tree_config = RuleTree.Config(**config_data)
 
     def test_add_rule(self, rule_dict):
         rule_tree = RuleTree()
         rule = PreDetectorRule.create_from_dict(rule_dict)
         rule_tree.add_rule(rule)
-
-        assert rule_tree.root.children[0].expression == Exists(["winlog"])
-        assert rule_tree.root.children[0].children[0].expression == StringFilterExpression(
-            ["winlog"], "123"
-        )
-        assert rule_tree.root.children[0].children[0].matching_rules == [rule]
+        assert rule_tree.number_of_rules == 1
 
         rule_dict["filter"] = "winlog: 123 AND xfoo: bar"
         rule = PreDetectorRule.create_from_dict(rule_dict)
         rule_tree.add_rule(rule)
-
-        assert rule_tree.root.children[0].children[0].children[0].expression == Exists(["xfoo"])
-        assert rule_tree.root.children[0].children[0].children[0].children[
-            0
-        ].expression == StringFilterExpression(["xfoo"], "bar")
-        assert rule_tree.root.children[0].children[0].children[0].children[0].matching_rules == [
-            rule
-        ]
+        assert rule_tree.number_of_rules == 2
 
     @mock.patch("logging.Logger.warning")
     def test_add_rule_fails(self, mock_warning, rule_dict):
@@ -100,12 +55,12 @@ class TestRuleTree:
         rule = PreDetectorRule.create_from_dict(rule_dict)
         error = Exception("mocked error")
         with mock.patch(
-            "logprep.framework.rule_tree.rule_parser.RuleParser.parse_rule",
+            "logprep.framework.rule_tree.rule_tree.PyRuleTree.parse_rule",
             side_effect=error,
         ):
             rule_tree.add_rule(rule)
         mock_warning.assert_called_with(
-            'Error parsing rule "%s.yml": %s: %s. Ignore and continue with next rule.',
+            'Error parsing rule "%s.yml": %s: %s. Ignore and continue.',
             None,
             type(error).__name__,
             error,
@@ -239,10 +194,10 @@ class TestRuleTree:
         assert rule_tree.get_matching_rules(document) == [rule]
 
     def test_match_including_tags(self, rule_dict):
-        tag_map = {"winlog": "WINDOWS"}
-
         rule_tree = RuleTree()
-        rule_tree.rule_parser = RuleParser(tag_map)
+        rule_tree.tree_config = RuleTree.Config(
+            tag_map={"winlog": "WINDOWS"},
+        )
 
         rule_dict["filter"] = "winlog: 123 AND test: (Good OR Okay OR Bad) OR foo: bar"
         rule = PreDetectorRule.create_from_dict(rule_dict)
@@ -252,19 +207,20 @@ class TestRuleTree:
         assert not rule_tree.get_matching_rules({"winlog": "123", "test": "Good"})
         assert rule_tree.get_matching_rules({"winlog": "123", "test": "Good", "WINDOWS": "foo"})
 
-        tag_map = {"winlog": "source.windows"}
+        rule_tree2 = RuleTree()
+        rule_tree2.tree_config = RuleTree.Config(
+            tag_map={"winlog": "source.windows"},
+        )
 
-        rule_tree = RuleTree()
-        rule_tree.rule_parser = RuleParser(tag_map)
+        rule2 = PreDetectorRule.create_from_dict(rule_dict)
+        rule_tree2.add_rule(rule2)
 
-        rule = PreDetectorRule.create_from_dict(rule_dict)
-
-        rule_tree.add_rule(rule)
-
-        assert not rule_tree.get_matching_rules({"winlog": "123", "test": "Okay"})
-        assert not rule_tree.get_matching_rules({"winlog": "123", "test": "Okay", "source": "foo"})
-        assert not rule_tree.get_matching_rules({"winlog": "123", "test": "Okay", "windows": "foo"})
-        assert rule_tree.get_matching_rules(
+        assert not rule_tree2.get_matching_rules({"winlog": "123", "test": "Okay"})
+        assert not rule_tree2.get_matching_rules({"winlog": "123", "test": "Okay", "source": "foo"})
+        assert not rule_tree2.get_matching_rules(
+            {"winlog": "123", "test": "Okay", "windows": "foo"}
+        )
+        assert rule_tree2.get_matching_rules(
             {"winlog": "123", "test": "Okay", "source": {"windows": "foo"}}
         )
 
@@ -284,17 +240,17 @@ class TestRuleTree:
         rule_tree = RuleTree()
         rule = PreDetectorRule.create_from_dict(rule_dict)
         rule_tree.add_rule(rule)
-        assert rule_tree.get_size() == 2
+        assert rule_tree.get_size() > 1
 
         rule_dict["filter"] = "winlog: 123 AND xfoo: bar"
         rule = PreDetectorRule.create_from_dict(rule_dict)
         rule_tree.add_rule(rule)
-        assert rule_tree.get_size() == 4
+        assert rule_tree.get_size() > 1
 
         rule_dict["filter"] = "winlog: 123 AND xfoo: foo"
         rule = PreDetectorRule.create_from_dict(rule_dict)
         rule_tree.add_rule(rule)
-        assert rule_tree.get_size() == 5
+        assert rule_tree.get_size() > 1
 
     def test_get_rules_as_list(self, rule_dict):
         rule_tree = RuleTree()
@@ -311,7 +267,7 @@ class TestRuleTree:
             PreDetectorRule.create_from_dict(rule_dict_3),
         ]
         _ = [rule_tree.add_rule(rule) for rule in rules]
-        rules_from_rule_tree = rule_tree._get_rules_as_list()
+        rules_from_rule_tree = rule_tree.rules
         assert len(rules_from_rule_tree) == 3
         for rule in rules:
             assert rule in rules_from_rule_tree

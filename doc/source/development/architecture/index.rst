@@ -15,7 +15,7 @@ It consists of several interconnected components that work together to make this
 Starting Logprep
 ================
 
-The following diagramm shows the starting behaviour of Logprep. 
+The following diagramm shows the starting behaviour of Logprep.
 
 .. raw:: html
    :file: ../../development/architecture/diagramms/logprep_start.drawio.html
@@ -32,7 +32,7 @@ This diagram shows the creation of Multiprocessing Pipelines and the shutdown of
 
 Pipeline
 ========
-This diagram shows the flow of the Pipeline. The starting-point is the creating of the 
+This diagram shows the flow of the Pipeline. The starting-point is the creating of the
 PipelineManager and therefore the start of the MultiprocessingPipeline.
 
 .. raw:: html
@@ -52,9 +52,9 @@ These was deemed to be important enough to be part of the diagram.
 Processor
 =========
 
-Below is a visualization of all available processors of Logprep. 
-These diagrams also show which processors inherit from what. 
-The first of these diagrams describes the process up to the 
+Below is a visualization of all available processors of Logprep.
+These diagrams also show which processors inherit from what.
+The first of these diagrams describes the process up to the
 actual application of the rule that is implemented in the respective processors.
 
 .. raw:: html

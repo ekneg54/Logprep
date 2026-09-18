@@ -55,8 +55,8 @@ class GrokPatternLoader:
         with open(pattern_path, "r", encoding="utf8") as pattern_file:
             lines = pattern_file.readlines()
             lines = [line for line in lines if line.strip() and not line.startswith("#")]
-            for idx, line in enumerate(lines):
-                line = line.rstrip("\n") if idx != len(lines) - 1 else line
+            for line in lines:
+                line = line.rstrip("\n")
                 identifier, pattern = line.split(" ", 1)
 
                 if identifier in grok_pattern_dict:

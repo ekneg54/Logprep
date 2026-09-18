@@ -6,5 +6,5 @@ clusterer:
   repl: 'byte'
 description: '...'
 tests:
-  raw:    'Byte is a Bytes is a bytes is a byte'
+  raw: 'Byte is a Bytes is a bytes is a byte'
   result: 'byte is a byte is a byte is a byte'

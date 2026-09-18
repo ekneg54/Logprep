@@ -50,7 +50,7 @@ Run with Logprep Container
 
       nix build .#docker.python311
       docker load < result
-    
+
     * Download the image:
     .. code-block:: bash
 

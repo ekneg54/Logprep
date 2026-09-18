@@ -4,6 +4,10 @@
 ### Features
 
 ### Improvements
+* migration: re-plan phase 4 and insert phase 3.5 (ProcessorCore orchestration) in `MIGRATION_PLAN.md` so that the ng ABC event-processing orchestration moves to Rust before per-processor migration; retain Python `Rule` attrs classes as external introspection API; define `matched_rule_ids` outcome as the seam for the later Rust metrics migration
+* ng: orchestrate event processing in the Rust `PyProcessorCore` (matching, warning/error handling, `apply_multiple_times` loop, `delete_source_fields` cleanup, bypass mode); the ng processor ABC consumes the `ProcessOutcome` (`matched_rule_ids`, `warnings`, `errors`) and dispatches un-migrated rules via a Python callback (`_apply_rule_in_python`)
+* migration phase 4a: split the Rust field helpers into the pure-Rust `field::value` module (operating on `serde_json::Value`) and `field::py` thin PyO3 wrappers that delegate to it; enable `serde_json` `preserve_order` so Python dict insertion order survives event round-trips; align `field::value` pop/lookup semantics with the Phase-1 behavior (colon dict keys, empty-parent cleanup on missing leaves)
+* migration phase 4b: flesh out the `RuleSpec` trait (`type_name`, `validate`, `apply` with `SpecWarning`/`SpecError` outcome channel) and dispatch registered specs in `PyProcessorCore::set_rule_spec` instead of the Python callback; add shared rule-loading helpers in `processor::spec_helper` (`validate_required_keys`, `split_dotted_fields`, typed raw-rule accessors)
 
 ### Bugfix
 

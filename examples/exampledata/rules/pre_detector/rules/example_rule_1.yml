@@ -6,4 +6,3 @@ pre_detector:
   mitre:
     - attack.test1
   case_condition: directly
-

@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
+# `extension-module` wird NICHT hier gesetzt: maturin aktiviert es beim Wheel-
+# Build via pyproject.toml ([tool.maturin] features). Ohne das Feature linkt
+# `cargo build`/`cargo test` gegen libpython (noetig fuer die Rust-Unit-Tests
+# des ProcessorCore, die eine echte Python-Interpreter-Instanz brauchen).
+pyo3 = { version = "0.25" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1"
+fancy-regex = "0.14"

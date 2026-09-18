@@ -2,6 +2,7 @@
 
 import datetime
 from collections import OrderedDict
+from typing import Union
 
 
 class Cache(OrderedDict):

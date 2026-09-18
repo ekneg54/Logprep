@@ -4,14 +4,15 @@
 # pylint: disable=duplicate-code
 # pylint: disable=function-redefined
 import os
-import time
 import tempfile
-from tests.unit.connector.base import BaseInputTestCase
+import time
+
 from tests.testdata.input_logdata.file_input_logs import (
     test_initial_log_data,
     test_rotated_log_data,
     test_rotated_log_data_less_256,
 )
+from tests.unit.connector.base import BaseInputTestCase
 
 CHECK_INTERVAL = 0.1
 
