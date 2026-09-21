@@ -7,7 +7,6 @@
 import inspect
 import logging
 import typing
-from abc import abstractmethod
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
@@ -79,6 +78,10 @@ class Processor(Component):
     ]
 
     rule_class: ClassVar[type[Rule] | None] = None
+    spec_config_keys: ClassVar[frozenset[str]] = frozenset()
+    """Configuration keys that are forwarded to the Rust ``RuleSpec`` factory.
+    Only processors whose rule application is migrated to Rust (Phase 4) set
+    this; empty for the Python-callback processors."""
     _event: LogEvent
     _core: PyProcessorCore
     _strategy = None
@@ -107,7 +110,11 @@ class Processor(Component):
 
         The core holds references to the live ``_inner`` and ``_rule_id_to_rule``
         attributes of the wrapper, so later ``RuleTree.add_rule(...)`` calls or
-        tree replacements take effect without an explicit resync.
+        tree replacements take effect without an explicit resync. Rules that are
+        added afterwards are additionally routed to ``_register_spec`` so that
+        migrated (Phase 4) processors register their Rust ``RuleSpec`` regardless
+        of whether the rules arrive via ``load_rules`` or an external
+        ``RuleTree.add_rule`` call (e.g. in tests).
 
         Parameters
         ----------
@@ -115,6 +122,7 @@ class Processor(Component):
             The rule tree wrapper to bind.
         """
         self.__dict__["_rule_tree"] = tree
+        tree.on_rule_added = self._register_spec
         self._core.set_tree(tree.inner, tree.rule_id_to_rule)
 
     @property
@@ -202,8 +210,59 @@ class Processor(Component):
             "but the Rust processor core only supports synchronous rule execution"
         )
 
-    @abstractmethod
-    async def _apply_rules(self, event: dict, rule: "Rule"): ...  # pragma: no cover
+    def _register_spec(self, rule_id: int, rule: Rule) -> None:
+        """Register the Rust ``RuleSpec`` for one rule (Phase 4).
+
+        Called by the ``RuleTree`` (see ``on_rule_added``) for every rule that
+        is added to the tree. Only processors that have been migrated set
+        ``_spec_factory`` (before ``Processor.__init__``) and ``spec_config_keys``;
+        for the remaining Python-callback processors this is a no-op.
+
+        Parameters
+        ----------
+        rule_id : int
+            The rule id assigned by the rule tree.
+        rule : Rule
+            The Python rule object whose config is forwarded to the spec factory.
+        """
+        factory = getattr(self, "_spec_factory", None)
+        if factory is None:
+            return
+        rule_config = rule._config  # pylint: disable=protected-access
+        rule_data = {
+            key: getattr(rule_config, key)
+            for key in type(self).spec_config_keys
+            if hasattr(rule_config, key)
+        }
+        for key, value in list(rule_data.items()):
+            if isinstance(value, set):
+                rule_data[key] = sorted(value)
+        factory.make_and_register(
+            core=self._core,
+            rule_id=rule_id,
+            rule_data=rule_data,
+        )
+        # Opt-in Python-Bridge fuer Prozessoren, deren per-Event-Logik Rust
+        # nicht abbilden kann (z.B. dynamische URIs beim generic_adder): Die
+        # Rule selbst kann die Bridgemethode `_spec_python_bridge` definieren;
+        # alle anderen Regeln registrieren keinen Bridge.
+        bridge = getattr(rule, "_spec_python_bridge", None)
+        if bridge is not None:
+            self._core.set_rule_spec_bridge(rule_id, bridge)
+
+    async def _apply_rules(self, event: dict, rule: Rule) -> None:  # pragma: no cover
+        """Default rule application hook.
+
+        Non-migrated processors override this with their event-processing logic.
+        Migrated (Phase 4) processors must not define it — their rules are applied
+        by the Rust ``RuleSpec`` on the core; reaching this default means a rule
+        has matched whose spec was not registered.
+        """
+        raise NotImplementedError(
+            f"{self.name}: rule application is handled by the Rust RuleSpec "
+            "on the ProcessorCore; no Python _apply_rules is available for "
+            f"rule id {getattr(rule, 'id', None)}"
+        )
 
     def test_rules(self) -> dict | None:
         """Perform custom rule tests.

@@ -12,6 +12,8 @@
 //! Rule-Zaehler ausschliesslich ueber diese IDs.
 
 pub mod core;
+pub mod generic_adder;
+pub mod key_checker;
 pub mod outcome;
 pub mod spec_helper;
 
@@ -27,6 +29,7 @@ pub use self::outcome::ProcessOutcome;
 /// Wird vom Core in ein Python `ProcessingWarning` / `FieldExistsWarning`
 /// konvertiert und ueber `handle_warning_error` in den `ProcessOutcome`
 /// eingehaengt.
+#[derive(Debug)]
 pub enum SpecWarning {
     /// Allgemeine Warnung (wird zu `ProcessingWarning(message, rule, event)`).
     Warning { message: String },
@@ -36,6 +39,7 @@ pub enum SpecWarning {
 
 /// Fehler, den ein `RuleSpec::apply` zurueckgeben kann (kritischer Pfad).
 /// Wird vom Core in ein Python `ProcessingCriticalError` konvertiert.
+#[derive(Debug)]
 pub enum SpecError {
     Critical { message: String },
 }
@@ -97,6 +101,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     submodule.add_class::<PyProcessorCore>()?;
     submodule.add_class::<ProcessOutcome>()?;
     submodule.add_class::<PyRuleSpec>()?;
+    submodule.add_class::<key_checker::PyKeyCheckerSpecFactory>()?;
+    submodule.add_class::<generic_adder::PyGenericAdderSpecFactory>()?;
     m.add_submodule(&submodule)?;
     let sys = m.py().import("sys")?;
     let modules = sys.getattr("modules")?;

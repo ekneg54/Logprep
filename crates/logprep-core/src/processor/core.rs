@@ -90,6 +90,16 @@ fn current_tag_set(event: &Bound<'_, PyDict>) -> PyResult<BTreeSet<String>> {
 /// sowie auf dessen lebendes `_rule_id_to_rule`-Mapping. Dadurch wirken sich
 /// nachtraegliche `RuleTree.add_rule(...)`-Aufrufe ohne erneutes Syncen aus;
 /// `set_tree` (bei Ersetzen des RuleTree) invalidiert den Meta-Cache.
+/// Ein registrierter Phase-4-`RuleSpec` zusammen mit einem optionalen
+/// Python-Bridge-Callback. Der Bridge wird fuer Prozessoren genutzt, deren
+/// Semantik Rust nicht abbilden kann (z.B. dynamische HTTP-URIs beim
+/// `GenericAdder`): Nach `spec.apply(...)` ruft der Core `bridge(event)`
+/// unter dem GIL auf und routet Fehler ueber `classify_error`.
+struct RegisteredRuleSpec {
+    spec: Box<dyn RuleSpec>,
+    python_bridge: Option<Py<PyAny>>,
+}
+
 #[pyclass]
 pub struct PyProcessorCore {
     tree: Option<Py<PyRuleTree>>,
@@ -99,14 +109,14 @@ pub struct PyProcessorCore {
     meta_cache: HashMap<u64, RuleMeta>,
     /// Phase-4-Slot: pure-Rust Rule-Anwendung. In Phase 3.5 immer leer —
     /// alle Rules laufen ueber den Python-Callback-Pfad.
-    rule_specs: HashMap<u64, Box<dyn RuleSpec>>,
+    rule_specs: HashMap<u64, RegisteredRuleSpec>,
 }
 
 #[pymethods]
 impl PyProcessorCore {
     #[new]
     #[pyo3(signature = (apply_multiple_times=false, bypass_rule_tree=false))]
-    fn new(apply_multiple_times: bool, bypass_rule_tree: bool) -> Self {
+    pub fn new(apply_multiple_times: bool, bypass_rule_tree: bool) -> Self {
         Self {
             tree: None,
             rule_mapping: None,
@@ -119,7 +129,7 @@ impl PyProcessorCore {
 
     /// Bindet den Rust-RuleTree und das lebendige Rule-Mapping des Python-
     /// `RuleTree`-Wrappers an. Invalidiert den Metadaten-Cache.
-    fn set_tree(&mut self, tree: Py<PyRuleTree>, rule_mapping: Py<PyDict>) {
+    pub fn set_tree(&mut self, tree: Py<PyRuleTree>, rule_mapping: Py<PyDict>) {
         self.tree = Some(tree);
         self.rule_mapping = Some(rule_mapping);
         self.meta_cache.clear();
@@ -136,7 +146,7 @@ impl PyProcessorCore {
     /// ihn; nach dem Aufruf ist das `inner` -- ein `Box<dyn RuleSpec>` --
     /// aus dem Wrapper entfernt und im Core gespeichert.
     #[pyo3(signature = (rule_id, spec))]
-    fn set_rule_spec(
+    pub fn set_rule_spec(
         &mut self,
         py: Python<'_>,
         rule_id: u64,
@@ -145,12 +155,36 @@ impl PyProcessorCore {
         let mut spec_ref = spec.borrow_mut(py);
         match spec_ref.inner.take() {
             Some(inner) => {
-                self.rule_specs.insert(rule_id, inner);
+                self.rule_specs.insert(
+                    rule_id,
+                    RegisteredRuleSpec {
+                        spec: inner,
+                        python_bridge: None,
+                    },
+                );
                 Ok(())
             }
             None => Err(pyo3::exceptions::PyValueError::new_err(
                 "PyRuleSpec already consumed by a previous set_rule_spec call",
             )),
+        }
+    }
+
+    /// Haengt an einen registrierten RuleSpec einen Python-Bridge-Callback
+    /// an, den der Core nach `spec.apply(...)` unter dem GIL aufruft
+    /// (`bridge(event)`). Der Bridge traegt die per-Event-Logik, die Rust
+    /// nicht abbilden kann (z.B. dynamische URI-Aufloesung); Fehler werden
+    /// von `apply_spec` ueber `classify_error` klassifiziert.
+    #[pyo3(signature = (rule_id, bridge))]
+    pub fn set_rule_spec_bridge(&mut self, rule_id: u64, bridge: Py<PyAny>) -> PyResult<()> {
+        match self.rule_specs.get_mut(&rule_id) {
+            Some(entry) => {
+                entry.python_bridge = Some(bridge);
+                Ok(())
+            }
+            None => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "no rule spec registered for rule id {rule_id}"
+            ))),
         }
     }
 
@@ -178,7 +212,7 @@ impl PyProcessorCore {
     /// `event` ist das lebende `event.data`-Dict — alle Mutationen (Callback,
     /// Tag-Merge, `delete_source_fields`) wirken direkt darauf.
     #[pyo3(signature = (event, apply_hook=None))]
-    fn process(
+    pub fn process(
         &mut self,
         py: Python<'_>,
         event: &Bound<'_, PyDict>,
@@ -328,7 +362,8 @@ impl PyProcessorCore {
         rule_obj: &Bound<'_, PyAny>,
         outcome: &mut ProcessOutcome,
     ) -> PyResult<()> {
-        let spec = self.rule_specs.get(&rule_id).unwrap();
+        let entry = self.rule_specs.get(&rule_id).unwrap();
+        let spec = &*entry.spec;
         let mut value = pydict_to_json(event.as_any())?;
         let mut warnings = Vec::new();
         let result = spec.apply(&mut value, &mut warnings);
@@ -340,7 +375,16 @@ impl PyProcessorCore {
             let exc_bound = exc.bind(py);
             Self::handle_warning_error(py, event, rule_obj, exc_bound, outcome)?;
         }
-        result.map_err(|err| Self::spec_error_to_pyerr(py, err, rule_obj))
+        result.map_err(|err| Self::spec_error_to_pyerr(py, err, rule_obj))?;
+        // Python-Bridge (zweckmässigerweise nicht mehr erreichbar, wenn der
+        // Spec kritisch fehlschlug — entspricht dem alten except-Fluss, der
+        // nach einem Fehler keine weiteren Quellen verarbeitet).
+        if let Some(bridge) = &entry.python_bridge {
+            if let Err(err) = bridge.call1(py, (event,)) {
+                Self::classify_error(py, event, rule_obj, err, outcome)?;
+            }
+        }
+        Ok(())
     }
 
     /// Konvertiert eine `SpecWarning` in die entsprechende Python-Exception.

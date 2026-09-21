@@ -8,6 +8,8 @@
 * ng: orchestrate event processing in the Rust `PyProcessorCore` (matching, warning/error handling, `apply_multiple_times` loop, `delete_source_fields` cleanup, bypass mode); the ng processor ABC consumes the `ProcessOutcome` (`matched_rule_ids`, `warnings`, `errors`) and dispatches un-migrated rules via a Python callback (`_apply_rule_in_python`)
 * migration phase 4a: split the Rust field helpers into the pure-Rust `field::value` module (operating on `serde_json::Value`) and `field::py` thin PyO3 wrappers that delegate to it; enable `serde_json` `preserve_order` so Python dict insertion order survives event round-trips; align `field::value` pop/lookup semantics with the Phase-1 behavior (colon dict keys, empty-parent cleanup on missing leaves)
 * migration phase 4b: flesh out the `RuleSpec` trait (`type_name`, `validate`, `apply` with `SpecWarning`/`SpecError` outcome channel) and dispatch registered specs in `PyProcessorCore::set_rule_spec` instead of the Python callback; add shared rule-loading helpers in `processor::spec_helper` (`validate_required_keys`, `split_dotted_fields`, typed raw-rule accessors)
+* key_checker: migrate rule apply to Rust `RuleSpec` via `ProcessorCore` (Phase 4i, Welle A); missing-field detection, sorted/dedup set merge and target write run in Rust, Python `KeyCheckerRule` retained for the external API
+* generic_adder: migrate the static `config.add` rule apply to Rust `RuleSpec` via `ProcessorCore` (Phase 4i, Welle A); dynamic URI-source resolution stays on the Python side through a rule-level `_spec_python_bridge` hook since it needs the `RefreshableGetter` (cache + callbacks) machinery; Python `GenericAdderRule` retained for the external API
 
 ### Bugfix
 

@@ -11,6 +11,8 @@ from logprep._rust import PyRuleTree  # pylint: disable=no-name-in-module
 from logprep.util.helper import deduplicate_with_order
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from logprep.processor.base.rule import Rule
 
 logger = getLogger("RuleTree")
@@ -19,11 +21,16 @@ logger = getLogger("RuleTree")
 class RuleTree:
     """Rule tree that maps between Python Rule objects and Rust rule ids."""
 
-    def __init__(self, config: str | None = None):
+    def __init__(
+        self,
+        config: str | None = None,
+        on_rule_added: "Callable[[int, Rule], None] | None" = None,
+    ):
         self._rule_id_to_rule: dict[int, "Rule"] = {}
         self._rule_to_id: dict[int, int] = {}
         self._inner = PyRuleTree()
         self._next_rule_id = 0
+        self.on_rule_added = on_rule_added
         self.tree_config = RuleTree.Config() if config is None else self._load_config(config)
 
     class Config:
@@ -79,6 +86,9 @@ class RuleTree:
 
         self._rule_id_to_rule[rule_id] = rule
         self._rule_to_id[id(rule)] = rule_id
+
+        if self.on_rule_added is not None:
+            self.on_rule_added(rule_id, rule)
 
     def get_matching_rules(self, event: dict) -> list["Rule"]:
         """Return all matching rules, mapped back to rule objects."""

@@ -24,37 +24,24 @@ Processor Configuration
 .. automodule:: logprep.processor.key_checker.rule
 """
 
-import typing
+# pylint: disable=import-error,no-name-in-module
+# `logprep._rust.processor` is registered at runtime by the Rust extension.
 
+from typing import ClassVar
+
+from logprep._rust.processor import PyKeyCheckerSpecFactory  # pylint: disable=no-name-in-module
 from logprep.ng.abc.processor import Processor
-from logprep.processor.base.rule import Rule
 from logprep.processor.key_checker.rule import KeyCheckerRule
-from logprep.util.helper import FieldValue, get_dotted_field_value
 
 
 class KeyChecker(Processor):
     """Checks if all keys of a given List are in the event"""
 
     rule_class = KeyCheckerRule
+    spec_config_keys: ClassVar[frozenset[str]] = frozenset(
+        {"source_fields", "target_field", "overwrite_target", "merge_with_target"}
+    )
 
-    async def _apply_rules(self, event: dict[str, FieldValue], rule: Rule) -> None:
-        rule = typing.cast(KeyCheckerRule, rule)
-        not_existing_fields = list(
-            {
-                dotted_field
-                for dotted_field in rule.source_fields
-                if not self._field_exists(event, dotted_field)
-            }
-        )
-
-        if not not_existing_fields:
-            return
-
-        output_value = get_dotted_field_value(event, rule.target_field)
-
-        if isinstance(output_value, typing.Iterable):
-            output_value = list({*not_existing_fields, *output_value})
-        else:
-            output_value = not_existing_fields
-
-        self._write_target_field(event, rule, sorted(output_value))
+    def __init__(self, name: str, configuration: "Processor.Config") -> None:
+        self._spec_factory = PyKeyCheckerSpecFactory()
+        super().__init__(name, configuration)
