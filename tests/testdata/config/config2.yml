@@ -8,7 +8,6 @@ pipeline:
       include_parent_labels: true
       rules:
         - tests/testdata/unit/labeler/rules
-
 input:
   kafka:
     type: confluentkafka_input
@@ -16,7 +15,6 @@ input:
     kafka_config:
       bootstrap.servers: 127.0.0.1:9092
       group.id: cgroup3
-
 output:
   kafka:
     type: confluentkafka_output

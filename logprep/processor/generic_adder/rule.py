@@ -92,6 +92,7 @@ from attrs import define, field, validators
 
 from logprep.abc.getter import Getter
 from logprep.filter.expression.filter_expression import FilterExpression
+from logprep.processor.base.exceptions import ProcessingWarning
 from logprep.processor.base.rule import InvalidRuleDefinitionError, Rule
 from logprep.util import helper
 from logprep.util.converters import convert_from_dict
@@ -100,6 +101,7 @@ from logprep.util.getter import GetterFactory, RefreshableGetter
 from logprep.util.helper import (
     DottedTemplate,
     FieldValue,
+    add_fields_to,
     get_dotted_field_value,
 )
 
@@ -483,3 +485,28 @@ class GenericAdderRule(Rule):
     def add(self, event: dict[str, FieldValue]) -> dict[str, FieldValue]:
         """Returns the fields to add"""
         return {key: value for items in self.additions(event) for key, value in items.items()}
+
+    def _spec_python_bridge(self, event: dict[str, FieldValue]) -> None:
+        """Python-side residual for URI sources (Phase 4i bridge hook).
+
+        Called by the Rust processor core after the static ``config.add`` block
+        was written by the ``GenericAdderRuleSpec``.  Only the URI sources are
+        handled here because their content resolution uses the
+        :class:`RefreshableGetter` machinery (caching, callbacks) which cannot
+        be reimplemented in Rust.
+        """
+        try:
+            for source in self._uri_sources:
+                content = self._content_for_source(source, event)
+                items_to_add = self._content_to_items_to_add(source.config, content)
+                if items_to_add:
+                    add_fields_to(
+                        event,
+                        items_to_add,
+                        self,
+                        self.merge_with_target,
+                        self.overwrite_target,
+                        skip_none=False,
+                    )
+        except Exception as error:
+            raise ProcessingWarning(str(error), self, event) from error

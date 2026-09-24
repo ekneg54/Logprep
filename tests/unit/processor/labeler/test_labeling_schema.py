@@ -7,21 +7,21 @@
 from copy import deepcopy
 from os.path import join
 
-from pytest import raises, fail, importorskip
+from pytest import fail, importorskip, raises
 
 importorskip("logprep.processor.labeler")
 
-from logprep.processor.labeler.labeling_schema import (
-    InvalidLabelingSchemaFileError,
-    LabelingSchemaError,
-    LabelingSchema,
-)
 from logprep.processor.base.exceptions import (
     KeyDoesnotExistInSchemaError,
     ValueDoesnotExistInSchemaError,
 )
+from logprep.processor.labeler.labeling_schema import (
+    InvalidLabelingSchemaFileError,
+    LabelingSchema,
+    LabelingSchemaError,
+)
 from tests.testdata.FilledTempFile import JsonTempFile
-from tests.testdata.metadata import path_to_testdata, path_to_config, path_to_schema
+from tests.testdata.metadata import path_to_config, path_to_schema, path_to_testdata
 
 
 class SchemasForTests:

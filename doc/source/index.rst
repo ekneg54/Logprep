@@ -3,7 +3,7 @@ Logprep: The swiss army knife for logs
 ======================================
 
 This is the documentation for Logprep. The swiss army knife for logs.
-It provides tools for: 
+It provides tools for:
 
 * **collection** of logs from various sources
 * **normalization** via different processors

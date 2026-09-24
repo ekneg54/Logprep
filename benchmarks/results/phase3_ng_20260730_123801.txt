@@ -1,0 +1,777 @@
+compose_opensearch-data
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:34:45 2036022 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:34:45 2036022 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:34:45 2036022 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:34:45 2036022 root Runner     INFO    : Startup complete
+
+=== BENCHMARK CONFIGURATION ===
+timestamp (local)             : 2026-07-30T14:34:13.341968
+timestamp (UTC)               : 2026-07-30T12:34:13.341972+00:00
+python version                : 3.14.2
+----------------------------------------
+bootstrap_servers             : 127.0.0.1:9092
+compose_dir                   : examples/compose
+container_runtime             : docker
+event_num                     : 400_000
+gen_input_source              : examples/exampledata/kafka_generate_input_logdata/logclass/test_input.jsonl
+kafka_partitions              : 1
+ng                            : 1
+  ↳ mode                      : logprep-ng
+  ↳ pipeline_config           : examples/exampledata/config/benchmark_ng_pipeline.yml
+opensearch_url                : http://localhost:9200
+out                           : None
+processed_index               : processed
+prometheus_multiproc_dir      : /tmp/logprep
+runs                          : [30, 30, 30]
+services                      : ['kafka', 'opensearch']
+sleep_after_compose_up_s      : 30
+sleep_after_logprep_start_s   : 10
+================================
+
+----- Run Round 1: 30 seconds -----
+2026-07-30 14:35:23 2036022 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:35:23 2036022 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:35:25 2036022 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2036022-809bf85c-9802-4dad-a9dd-b5c8bfd02327 to be revoked from topic: consumer | partition 0
+2026-07-30 14:35:25 2036022 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+compose_opensearch-data
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:35:57 2045929 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:35:58 2045929 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:35:58 2045929 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:35:58 2045929 root Runner     INFO    : Startup complete
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.497 s
+measurement window:     30.000 s
+processed (OpenSearch): 65_034
+throughput:             2,167.80 docs/s
+--------------
+
+----- Run Round 2: 30 seconds -----
+2026-07-30 14:36:35 2045929 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:36:36 2045929 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:36:37 2045929 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2045929-59e91770-3b8e-4e5d-9b6b-138739ad7f68 to be revoked from topic: consumer | partition 0
+2026-07-30 14:36:37 2045929 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+compose_opensearch-data
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator SVC from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfTransformer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator TfidfVectorizer from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:37:11 2056695 None py.warnings WARNING : /home/veritas/projects/Logprep/.venv/lib/python3.14/site-packages/sklearn/base.py:463: InconsistentVersionWarning: Trying to unpickle estimator MinMaxScaler from version 1.2.2 when using version 1.8.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+2026-07-30 14:37:11 2056695 None root       INFO    : Log level set to 'WARNING'
+2026-07-30 14:37:11 2056695 refresh_config Runner     INFO    : config refresh stopped: config_refresh_interval not set
+2026-07-30 14:37:11 2056695 root Runner     INFO    : Startup complete
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.408 s
+measurement window:     30.000 s
+processed (OpenSearch): 65_033
+throughput:             2,167.76 docs/s
+--------------
+
+----- Run Round 3: 30 seconds -----
+2026-07-30 14:37:49 2056695 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:37:49 2056695 None Runner     INFO    : Setting stop signal for the runner
+2026-07-30 14:37:50 2056695 Task-215 KafkaInput WARNING : VOP-PipelineNone-pid2056695-8050c71a-b5cd-4a8e-bf75-2d4472a6a419 to be revoked from topic: consumer | partition 0
+2026-07-30 14:37:50 2056695 root Runner     WARNING : Getter refresh loop stopped unexpectedly. Exiting...
+--- RESULT ---
+run_seconds:            30
+events generated:       400_000
+generation time:        3.163 s
+measurement window:     30.000 s
+processed (OpenSearch): 65_051
+throughput:             2,168.36 docs/s
+--------------
+
+
+=== FINAL BENCHMARK SUMMARY ===
+runs:                  3
+total runtime:         90.000 s
+total processed:       195_118
+
+throughput (weighted): 2,167.97 docs/s
+throughput (median):   2,167.80 docs/s
+throughput (average):  2,167.97 docs/s
+throughput (min/max):  2,167.76 / 2,168.36 docs/s
+throughput (std dev):  0.34 docs/s
+================================
+
+ Container prometheus Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopping 
+ Container grafana Stopping 
+ Container grafana Stopped 
+ Container grafana Removing 
+ Container prometheus Stopped 
+ Container prometheus Removing 
+ Container grafana Removed 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container prometheus Removed 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_kafka Removing 
+ Network compose_prometheus Removing 
+ Network compose_opensearch Removing 
+ Network compose_opensearch Removed 
+ Network compose_prometheus Removed 
+ Network compose_kafka Removed 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container kafka Started 
+ Container opensearch Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container kafka Creating 
+ Container opensearch Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container kafka Starting 
+ Container opensearch Starting 
+ Container opensearch Started 
+ Container kafka Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_kafka Removed 
+ Network compose_opensearch Removed 
+ Network compose_kafka Creating 
+ Network compose_kafka Created 
+ Network compose_opensearch Creating 
+ Network compose_opensearch Created 
+ Volume compose_opensearch-data Creating 
+ Volume compose_opensearch-data Created 
+ Container opensearch Creating 
+ Container kafka Creating 
+ Container kafka Created 
+ Container opensearch Created 
+ Container opensearch Starting 
+ Container kafka Starting 
+ Container opensearch Started 
+ Container kafka Started 
+No stopped containers
+setting loggers.root.level is discouraged as this value is being overwritten by the global (default) level (INFO)
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=28 c=Some('s')
+DEBUG read_string_lit pos=29 c=Some('t')
+DEBUG read_string_lit pos=30 c=Some('o')
+DEBUG read_string_lit pos=31 c=Some('p')
+DEBUG read_string_lit pos=32 c=Some('"')
+DEBUG read_string_lit pos=8 c=Some('1')
+DEBUG read_string_lit pos=9 c=Some('"')
+DEBUG read_string_lit pos=29 c=Some('1')
+DEBUG read_string_lit pos=30 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+DEBUG read_string_lit pos=47 c=Some('M')
+DEBUG read_string_lit pos=48 c=Some('i')
+DEBUG read_string_lit pos=49 c=Some('c')
+DEBUG read_string_lit pos=50 c=Some('r')
+DEBUG read_string_lit pos=51 c=Some('o')
+DEBUG read_string_lit pos=52 c=Some('s')
+DEBUG read_string_lit pos=53 c=Some('o')
+DEBUG read_string_lit pos=54 c=Some('f')
+DEBUG read_string_lit pos=55 c=Some('t')
+DEBUG read_string_lit pos=56 c=Some('-')
+DEBUG read_string_lit pos=57 c=Some('W')
+DEBUG read_string_lit pos=58 c=Some('i')
+DEBUG read_string_lit pos=59 c=Some('n')
+DEBUG read_string_lit pos=60 c=Some('d')
+DEBUG read_string_lit pos=61 c=Some('o')
+DEBUG read_string_lit pos=62 c=Some('w')
+DEBUG read_string_lit pos=63 c=Some('s')
+DEBUG read_string_lit pos=64 c=Some('-')
+DEBUG read_string_lit pos=65 c=Some('S')
+DEBUG read_string_lit pos=66 c=Some('y')
+DEBUG read_string_lit pos=67 c=Some('s')
+DEBUG read_string_lit pos=68 c=Some('m')
+DEBUG read_string_lit pos=69 c=Some('o')
+DEBUG read_string_lit pos=70 c=Some('n')
+DEBUG read_string_lit pos=71 c=Some('"')
+ Container opensearch Stopping 
+ Container kafka Stopping 
+ Container opensearch Stopped 
+ Container opensearch Removing 
+ Container opensearch Removed 
+ Container kafka Stopped 
+ Container kafka Removing 
+ Container kafka Removed 
+ Network compose_opensearch Removing 
+ Network compose_kafka Removing 
+ Network compose_opensearch Removed 
+ Network compose_kafka Removed 

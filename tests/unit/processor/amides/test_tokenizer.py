@@ -4,10 +4,10 @@
 import pytest
 
 from logprep.processor.amides.features import (
-    FilterDummyCharacters,
-    Lowercase,
     AnyWordCharacter,
     CommaSeparation,
+    FilterDummyCharacters,
+    Lowercase,
     NumericValues,
     Strings,
 )

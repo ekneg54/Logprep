@@ -277,11 +277,20 @@ class BaseProcessorTestCase(BaseComponentTestCase[ProcessorTypeT], typing.Generi
         assert isinstance(result, LogEvent)
 
     async def test_process_collects_errors_in_event_object(self):
-        with mock.patch.object(
-            self.object,
-            "_apply_rules",
-            side_effect=ProcessingCriticalError("side effect", rule=self.object.rules[0]),
-        ):
+        """Errors produced during rule application land in the event object.
+
+        The errors are injected through the core's outcome so the test holds for
+        both Python-callback processors and Phase-4-migrated processors (whose
+        rules apply in the Rust RuleSpec and whose errors surface via
+        ``outcome.errors``, not the ``_apply_rules`` callback).
+        """
+        core = mock.MagicMock()
+        core.process.return_value.matched_rule_ids = []
+        core.process.return_value.warnings = []
+        core.process.return_value.errors = [
+            ProcessingCriticalError("side effect", rule=self.object.rules[0])
+        ]
+        with mock.patch.object(self.object, "_core", core):
             result = await self.object.process(self.match_all_event)
         assert len(result.errors) > 0, "minimum one error should be in result object"
 

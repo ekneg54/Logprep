@@ -1,5 +1,6 @@
 # pylint: disable=missing-docstring
 import pytest
+
 from tests.unit.processor.base import BaseProcessorTestCase
 
 

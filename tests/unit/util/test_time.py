@@ -4,7 +4,7 @@
 # pylint: disable=too-many-positional-arguments
 # pylint: disable=protected-access
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from math import isclose
 from zoneinfo import ZoneInfo
 

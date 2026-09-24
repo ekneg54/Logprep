@@ -1,10 +1,9 @@
 """Module for Signature-Phase of the Log-Clustering."""
 
 import re
-from typing import Tuple, List, Dict
-
 from collections import OrderedDict
 from types import SimpleNamespace
+from typing import Dict, List, Tuple
 
 from logprep.processor.clusterer.configuration import SignatureProgramTags
 from logprep.processor.clusterer.rule import ClustererRule
